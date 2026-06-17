@@ -7,10 +7,10 @@ import org.springframework.web.client.RestClient;
 @Component
 public class SetlistFmClient {
     private final RestClient restClient;
-    @Value("${SETLIST_FM_KEY}")
-    private String apiKey;
+    private final String apiKey;
 
-    public SetlistFmClient() {
+    public SetlistFmClient(@Value("${SETLIST_FM_KEY}") String apiKey) {
+        this.apiKey = apiKey;
         this.restClient = RestClient.builder().baseUrl("https://api.setlist.fm/rest/1.0").build();
     }
 
