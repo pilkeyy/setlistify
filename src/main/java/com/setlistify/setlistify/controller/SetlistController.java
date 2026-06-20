@@ -1,10 +1,8 @@
 package com.setlistify.setlistify.controller;
 
 import com.setlistify.setlistify.client.SetlistFmClient;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.RestController;
+import com.setlistify.setlistify.model.dto.SetlistResponse;
+import org.springframework.web.bind.annotation.*;
 
 @RestController
 @RequestMapping("/api/v1/setlists")
@@ -16,7 +14,7 @@ public class SetlistController {
     }
 
     @GetMapping("/search")
-    public String searchSetlists(@RequestParam String artist) {
+    public SetlistResponse searchSetlists(@RequestParam String artist) {
         return setlistFmClient.fetchRawSetlists(artist);
     }
 }

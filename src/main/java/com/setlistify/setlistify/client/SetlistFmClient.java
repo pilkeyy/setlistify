@@ -1,5 +1,6 @@
 package com.setlistify.setlistify.client;
 
+import com.setlistify.setlistify.model.dto.SetlistResponse;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
@@ -14,12 +15,12 @@ public class SetlistFmClient {
         this.restClient = RestClient.builder().baseUrl("https://api.setlist.fm/rest/1.0").build();
     }
 
-    public String fetchRawSetlists(String artistName) {
+    public SetlistResponse fetchRawSetlists(String artistName) {
         return restClient.get().
                 uri("/search/setlists?artistName=" + artistName)
                 .header("Accept", "application/json")
                 .header("x-api-key", apiKey)
                 .retrieve().
-                body(String.class);
+                body(SetlistResponse.class);
     }
 }
