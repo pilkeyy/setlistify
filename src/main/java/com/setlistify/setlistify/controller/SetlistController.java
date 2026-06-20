@@ -1,20 +1,27 @@
 package com.setlistify.setlistify.controller;
 
-import com.setlistify.setlistify.client.SetlistFmClient;
-import com.setlistify.setlistify.model.dto.SetlistResponse;
+import com.setlistify.setlistify.model.dto.ConcertSummary;
+import com.setlistify.setlistify.services.SetlistService;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
 
 @RestController
 @RequestMapping("/api/v1/setlists")
 public class SetlistController {
-    private final SetlistFmClient setlistFmClient;
+    private final SetlistService setlistService;
 
-    public SetlistController(SetlistFmClient setlistFmClient) {
-        this.setlistFmClient = setlistFmClient;
+    public SetlistController(SetlistService setlistService) {
+        this.setlistService = setlistService;
     }
 
     @GetMapping("/search")
-    public SetlistResponse searchSetlists(@RequestParam String artist) {
-        return setlistFmClient.fetchRawSetlists(artist);
+    public List<ConcertSummary> searchSetlists(@RequestParam String artist) {
+        return setlistService.searchConcertDirectory(artist);
+    }
+    
+    @GetMapping("/{setlistId}/tracks")
+    public List<String> getSetlistTracks(@PathVariable String setlistId) {
+        return setlistService.getTracksFromSetlist(setlistId);
     }
 }
