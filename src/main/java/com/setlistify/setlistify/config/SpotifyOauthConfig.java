@@ -1,26 +1,10 @@
 package com.setlistify.setlistify.config;
 
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.context.annotation.Configuration;
+import org.springframework.boot.context.properties.ConfigurationProperties;
 
-@Configuration
-public class SpotifyOauthConfig {
-    @Value("${spotify.client-id}")
-    private String clientId;
-    @Value("${spotify.redirect-uri}")
-    private String redirectUri;
-    @Value("${spotify.scopes}")
-    private String scopes;
-
-    public String getClientId() {
-        return clientId;
-    }
-
-    public String getRedirectUri() {
-        return redirectUri;
-    }
-
-    public String getScopes() {
-        return scopes;
-    }
-}
+@ConfigurationProperties(prefix = "spotify")
+public record SpotifyOauthConfig(
+        String clientId,
+        String redirectUri,
+        String scopes
+) {}
