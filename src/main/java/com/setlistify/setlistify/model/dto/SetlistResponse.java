@@ -1,7 +1,0 @@
-package com.setlistify.setlistify.model.dto;
-
-import java.util.List;
-
-public record SetlistResponse(List<ConcertRecord> setlist) {
-
-}

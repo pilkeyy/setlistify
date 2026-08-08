@@ -1,7 +1,7 @@
 package com.setlistify.setlistify.controller;
 
 import com.setlistify.setlistify.config.SpotifyOauthConfig;
-import com.setlistify.setlistify.model.dto.TokenResponse;
+import com.setlistify.setlistify.model.dto.SpotifyDTOs.TokenResponse;
 import com.setlistify.setlistify.services.SpotifyAuthService;
 import com.setlistify.setlistify.util.PkceUtil;
 import jakarta.servlet.http.HttpSession;
@@ -13,7 +13,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.util.UriComponentsBuilder;
-
 
 import java.net.URI;
 import java.util.UUID;
@@ -27,7 +26,6 @@ public class AuthController {
     public AuthController(SpotifyOauthConfig oauthConfig, SpotifyAuthService spotifyAuthService) {
         this.oauthConfig = oauthConfig;
         this.spotifyAuthService = spotifyAuthService;
-
     }
 
     @GetMapping("/login")
@@ -83,3 +81,4 @@ public class AuthController {
         return ResponseEntity.ok("Successfully authenticated with Spotify!");
     }
 }
+

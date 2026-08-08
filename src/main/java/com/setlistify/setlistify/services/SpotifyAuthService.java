@@ -1,7 +1,7 @@
 package com.setlistify.setlistify.services;
 
 import com.setlistify.setlistify.client.SpotifyClient;
-import com.setlistify.setlistify.model.dto.TokenResponse;
+import com.setlistify.setlistify.model.dto.SpotifyDTOs.TokenResponse;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -16,3 +16,4 @@ public class SpotifyAuthService {
         return spotifyClient.fetchTokens(code, codeVerifier);
     }
 }
+

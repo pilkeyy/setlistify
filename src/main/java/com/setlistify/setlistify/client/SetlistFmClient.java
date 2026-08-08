@@ -1,7 +1,7 @@
 package com.setlistify.setlistify.client;
 
-import com.setlistify.setlistify.model.dto.ConcertRecord;
-import com.setlistify.setlistify.model.dto.SetlistResponse;
+import com.setlistify.setlistify.model.dto.SetlistFmDTOs.ConcertRecord;
+import com.setlistify.setlistify.model.dto.SetlistFmDTOs.SetlistResponse;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
@@ -34,3 +34,4 @@ public class SetlistFmClient {
                          .body(SetlistResponse.class);
     }
 }
+

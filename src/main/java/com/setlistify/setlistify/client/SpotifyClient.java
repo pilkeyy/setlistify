@@ -1,12 +1,12 @@
 package com.setlistify.setlistify.client;
 
 import com.setlistify.setlistify.config.SpotifyOauthConfig;
+import com.setlistify.setlistify.model.dto.SpotifyDTOs.TokenResponse;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.RestClient;
-import com.setlistify.setlistify.model.dto.TokenResponse;
 
 @Component
 public class SpotifyClient {
@@ -33,5 +33,5 @@ public class SpotifyClient {
                          .retrieve()
                          .body(TokenResponse.class);
     }
-
 }
+

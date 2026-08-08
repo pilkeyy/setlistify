@@ -1,16 +1,14 @@
 package com.setlistify.setlistify.services;
 
 import com.setlistify.setlistify.client.SetlistFmClient;
-import com.setlistify.setlistify.model.dto.ConcertRecord;
-import com.setlistify.setlistify.model.dto.ConcertSummary;
-import com.setlistify.setlistify.model.dto.SetlistResponse;
-import com.setlistify.setlistify.model.dto.SongRecord;
+import com.setlistify.setlistify.model.dto.SetlistFmDTOs.ConcertRecord;
+import com.setlistify.setlistify.model.dto.SetlistFmDTOs.ConcertSummary;
+import com.setlistify.setlistify.model.dto.SetlistFmDTOs.SetlistResponse;
+import com.setlistify.setlistify.model.dto.SetlistFmDTOs.SongRecord;
 import org.springframework.stereotype.Service;
-
 
 import java.util.Collections;
 import java.util.List;
-
 
 @Service
 public class SetlistService {
@@ -44,3 +42,4 @@ public class SetlistService {
                       .toList();
     }
 }
+

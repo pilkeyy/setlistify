@@ -1,6 +1,6 @@
 package com.setlistify.setlistify.controller;
 
-import com.setlistify.setlistify.model.dto.ConcertSummary;
+import com.setlistify.setlistify.model.dto.SetlistFmDTOs.ConcertSummary;
 import com.setlistify.setlistify.services.SetlistService;
 import org.springframework.web.bind.annotation.*;
 
@@ -25,3 +25,4 @@ public class SetlistController {
         return setlistService.getTracksFromSetlist(setlistId);
     }
 }
+
