@@ -1,6 +1,7 @@
 package com.setlistify.setlistify.client;
 
 import com.setlistify.setlistify.config.SpotifyOauthConfig;
+import com.setlistify.setlistify.model.dto.SpotifyDTOs.UserProfile;
 import com.setlistify.setlistify.model.dto.SpotifyDTOs.TokenResponse;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
@@ -11,11 +12,13 @@ import org.springframework.web.client.RestClient;
 @Component
 public class SpotifyClient {
     private final SpotifyOauthConfig oauthConfig;
-    private final RestClient restClient;
+    private final RestClient authRestClient;
+    private final RestClient apiRestClient;
 
     public SpotifyClient(SpotifyOauthConfig oauthConfig) {
         this.oauthConfig = oauthConfig;
-        this.restClient = RestClient.builder().baseUrl("https://accounts.spotify.com").build();
+        authRestClient = RestClient.builder().baseUrl("https://accounts.spotify.com").build();
+        apiRestClient = RestClient.builder().baseUrl("https://api.spotify.com/v1").build();
     }
 
     public TokenResponse fetchTokens(String code, String codeVerifier) {
@@ -26,12 +29,20 @@ public class SpotifyClient {
         body.add("client_id", oauthConfig.clientId());
         body.add("code_verifier", codeVerifier);
 
-        return restClient.post()
-                         .uri("/api/token")
-                         .contentType(MediaType.APPLICATION_FORM_URLENCODED)
-                         .body(body)
-                         .retrieve()
-                         .body(TokenResponse.class);
+        return authRestClient.post()
+                             .uri("/api/token")
+                             .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                             .body(body)
+                             .retrieve()
+                             .body(TokenResponse.class);
+    }
+
+    public UserProfile fetchUserProfile(String accessToken) {
+        return apiRestClient.get()
+                            .uri("/me")
+                            .header("Authorization", "Bearer " + accessToken)
+                            .retrieve()
+                            .body(UserProfile.class);
     }
 }
 
