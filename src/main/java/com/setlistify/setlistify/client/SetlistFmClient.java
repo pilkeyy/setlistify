@@ -13,16 +13,16 @@ public class SetlistFmClient {
 
     public SetlistFmClient(@Value("${SETLIST_FM_KEY}") String apiKey) {
         this.apiKey = apiKey;
-        this.restClient = RestClient.builder().baseUrl("https://api.setlist.fm/rest/1.0").build();
+        restClient = RestClient.builder().baseUrl("https://api.setlist.fm/rest/1.0").build();
     }
 
     public ConcertRecord fetchSingleSetlist(String setlistId) {
-        return this.restClient.get()
-                              .uri("/setlist/{id}", setlistId)
-                              .header("Accept", "application/json")
-                              .header("x-api-key", apiKey)
-                              .retrieve()
-                              .body(ConcertRecord.class);
+        return restClient.get()
+                         .uri("/setlist/{id}", setlistId)
+                         .header("Accept", "application/json")
+                         .header("x-api-key", apiKey)
+                         .retrieve()
+                         .body(ConcertRecord.class);
     }
 
     public SetlistResponse fetchRawSetlists(String artistName) {
