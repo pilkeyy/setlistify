@@ -16,7 +16,7 @@ public class SpotifyDTOs {
     ) {}
 
     public record UserProfile(
-            String id,
+            @JsonProperty("account_id") String accountId,
             @JsonProperty("display_name") String displayName
     ) {}
 
