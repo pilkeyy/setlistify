@@ -1,6 +1,9 @@
 package com.setlistify.setlistify.client;
 
 import com.setlistify.setlistify.config.SpotifyOauthConfig;
+import com.setlistify.setlistify.model.dto.SpotifyDTOs.SearchResponse;
+import com.setlistify.setlistify.model.dto.SpotifyDTOs.CreatePlaylistRequest;
+import com.setlistify.setlistify.model.dto.SpotifyDTOs.PlaylistResponse;
 import com.setlistify.setlistify.model.dto.SpotifyDTOs.UserProfile;
 import com.setlistify.setlistify.model.dto.SpotifyDTOs.TokenResponse;
 import org.springframework.http.MediaType;
@@ -43,6 +46,29 @@ public class SpotifyClient {
                             .header("Authorization", "Bearer " + accessToken)
                             .retrieve()
                             .body(UserProfile.class);
+    }
+
+    public PlaylistResponse createPlaylist(CreatePlaylistRequest request, String accessToken) {
+
+        return apiRestClient.post()
+                            .uri("/me/playlists")
+                            .header("Authorization", "Bearer " + accessToken)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .body(request)
+                            .retrieve()
+                            .body(PlaylistResponse.class);
+    }
+
+    public SearchResponse searchTrack(String accessToken, String query) {
+        return apiRestClient.get()
+                            .uri(uriBuilder -> uriBuilder.path("/search")
+                                                         .queryParam("q", query)
+                                                         .queryParam("type", "track")
+                                                         .queryParam("limit", 1)
+                                                         .build())
+                            .header("Authorization", "Bearer " + accessToken)
+                            .retrieve()
+                            .body(SearchResponse.class);
     }
 }
 
