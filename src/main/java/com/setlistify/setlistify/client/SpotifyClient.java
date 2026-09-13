@@ -1,6 +1,7 @@
 package com.setlistify.setlistify.client;
 
 import com.setlistify.setlistify.config.SpotifyOauthConfig;
+import com.setlistify.setlistify.model.dto.SpotifyDTOs;
 import com.setlistify.setlistify.model.dto.SpotifyDTOs.SearchResponse;
 import com.setlistify.setlistify.model.dto.SpotifyDTOs.CreatePlaylistRequest;
 import com.setlistify.setlistify.model.dto.SpotifyDTOs.PlaylistResponse;
@@ -11,6 +12,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.RestClient;
+
+import java.util.List;
 
 @Component
 public class SpotifyClient {
@@ -69,6 +72,16 @@ public class SpotifyClient {
                             .header("Authorization", "Bearer " + accessToken)
                             .retrieve()
                             .body(SearchResponse.class);
+    }
+
+    public void addTracksToPlaylist(String accessToken, String playlistID, List<String> batch) {
+        apiRestClient.post()
+                     .uri("/playlists{playlist_id}/items", playlistID)
+                     .header("Authorization", "Bearer " + accessToken)
+                     .contentType(MediaType.APPLICATION_JSON)
+                     .body(new SpotifyDTOs.AddItemsRequest(batch))
+                     .retrieve()
+                     .toBodilessEntity();
     }
 }
 
