@@ -1,5 +1,6 @@
 HELP.md
 AGENTS.md
+graphify-out/
 target/
 .mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/

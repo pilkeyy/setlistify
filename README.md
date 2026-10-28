@@ -12,7 +12,7 @@ The API exposes these operations:
 
 - `GET /api/v1/setlists/search?artist={name}` returns concert summaries from setlist.fm.
 - `GET /api/v1/setlists/{setlistId}/tracks` returns song names from a setlist.
-- `POST /api/v1/playlists/generate` takes a setlist ID, artist name, playlist name, and optional public/private choice. It searches Spotify for each song, creates a playlist, adds the first match for each song, and returns the playlist URL and unmatched songs.
+- `POST /api/v1/playlists/generate` takes a setlist ID, artist name, playlist name, and optional public/private choice. It classifies Spotify search results, creates a playlist only when at least one track is confirmed, and returns the playlist URL plus songs that were unmatched or need review. If no track is confirmed, it returns `422` without creating a playlist.
 
 The repository has no browser UI; a client must call these endpoints. Spotify login starts at `GET /api/v1/auth/login`.
 
@@ -54,7 +54,8 @@ The implementation stores the access token in the HTTP session, but does not ref
 - Spotify and setlist.fm HTTP calls are isolated in separate client classes; service classes handle the multi-call workflow.
 - API payloads use Java record DTOs, including nested records for Spotify search results and setlist.fm concert data.
 - The PKCE verifier and OAuth state live in the HTTP session across the redirect. The access token is kept there for subsequent requests, so authentication depends on session continuity; the application is not stateless.
-- Track searches use `track:{song} artist:{artist}` and request one result. The service takes that first result when available and reports songs with no result as unmatched.
+- Track searches use `track:{song} artist:{artist}` and request five results. Matching ignores case, accents, punctuation, and spacing but preserves version labels such as “Live” and “Remastered.” A single exact title-and-artist match is added automatically; title matches with a different artist or multiple matching recordings are returned for review. Successful searches with no exact title match are reported as unmatched.
+- Playlist creation happens after matching. If there are no confirmed tracks, no Spotify playlist is created; Spotify search or playlist-write errors are still upstream failures rather than unmatched songs.
 - Spotify searches currently run sequentially, one request per setlist song. This keeps the workflow straightforward, but playlist generation time grows with the number of songs and Spotify's response times; parallel lookups would need to account for API rate limits.
 - The service adds Spotify URIs through `POST /playlists/{playlist_id}/items`, in batches of at most 100.
 
@@ -94,7 +95,8 @@ The test suite currently contains one Spring Boot context-load test. There are n
 
 - The project provides a REST API only; there is no user-facing web interface.
 - Spotify access tokens are stored in the HTTP session, but refresh-token and expired-session handling are not implemented.
-- Matching uses only Spotify's first search result, with no confidence check or manual review.
+- The API reports candidate tracks needing review, but there is no browser UI yet for selecting among them.
+- Spotify searches still run sequentially, so generation time increases with setlist length. Handling API rate limits and partial failures during batched playlist writes remains future work.
 - Production deployment and API-specific error handling are not implemented.
 
 ## Roadmap

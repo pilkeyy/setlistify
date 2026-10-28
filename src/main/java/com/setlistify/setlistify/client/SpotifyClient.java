@@ -67,7 +67,7 @@ public class SpotifyClient {
                             .uri(uriBuilder -> uriBuilder.path("/search")
                                                          .queryParam("q", query)
                                                          .queryParam("type", "track")
-                                                         .queryParam("limit", 1)
+                                                         .queryParam("limit", 5)
                                                          .build())
                             .header("Authorization", "Bearer " + accessToken)
                             .retrieve()
@@ -76,7 +76,7 @@ public class SpotifyClient {
 
     public void addTracksToPlaylist(String accessToken, String playlistID, List<String> batch) {
         apiRestClient.post()
-                     .uri("/playlists{playlist_id}/items", playlistID)
+                     .uri("/playlists/{playlist_id}/items", playlistID)
                      .header("Authorization", "Bearer " + accessToken)
                      .contentType(MediaType.APPLICATION_JSON)
                      .body(new SpotifyDTOs.AddItemsRequest(batch))
@@ -84,4 +84,3 @@ public class SpotifyClient {
                      .toBodilessEntity();
     }
 }
-
