@@ -69,7 +69,7 @@ public class AuthController {
         }
         String savedState = (String) session.getAttribute("oauth_state");
         if (state == null || !state.equals(savedState)) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Invalid state parameter.");
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("Invalid OAuth state parameter.");
         }
         String codeVerifier = (String) session.getAttribute("spotify_verifier");
         if (code == null || codeVerifier == null) {
@@ -81,4 +81,3 @@ public class AuthController {
         return ResponseEntity.ok("Successfully authenticated with Spotify!");
     }
 }
-
