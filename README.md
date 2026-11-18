@@ -12,6 +12,7 @@ The API exposes these operations:
 
 - `GET /api/v1/setlists/search?artist={name}` returns concert summaries from setlist.fm.
 - `GET /api/v1/setlists/{setlistId}/tracks` returns song names from a setlist.
+- `POST /api/v1/playlist-previews` takes `{"setlistId":"…"}` and uses the signed-in Spotify session. It returns `200` with the concert artist and songs in setlist order. Each row has a one-based `songId` within that response, its title, a status (`MATCHED`, `NEEDS_REVIEW`, or `UNMATCHED`), a reason, and Spotify candidates with optional album artwork. The endpoint performs catalog reads only. It returns `422` if the source setlist has no songs or usable artist. The client holds the response for the current review.
 - `POST /api/v1/playlists/generate` takes a setlist ID, artist name, playlist name, and optional public/private choice. It classifies Spotify search results, creates a playlist only when at least one track is confirmed, and returns the playlist URL plus songs that were unmatched or need review. If no track is confirmed, it returns `422` without creating a playlist.
 
 The repository has no browser UI; a client must call these endpoints. Spotify login starts at `GET /api/v1/auth/login`.

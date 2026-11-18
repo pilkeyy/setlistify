@@ -76,10 +76,10 @@ public class SpotifyClient {
     public SearchResponse searchTrack(String accessToken, String query) {
         return executeSpotifyApiRequest(() -> apiRestClient.get()
                                                           .uri(uriBuilder -> uriBuilder.path("/search")
-                                                                                       .queryParam("q", query)
+                                                                                       .queryParam("q", "{query}")
                                                                                        .queryParam("type", "track")
                                                                                        .queryParam("limit", 5)
-                                                                                       .build())
+                                                                                       .build(query))
                                                           .header("Authorization", "Bearer " + accessToken)
                                                           .retrieve()
                                                           .body(SearchResponse.class));

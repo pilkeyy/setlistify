@@ -28,6 +28,31 @@ class PlaylistControllerTest {
     private SpotifyPlaylistService playlistService;
 
     @Test
+    void previewRequiresSpotifySession() throws Exception {
+        mockMvc.perform(post("/api/v1/playlist-previews")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"setlistId":"setlist-123"}
+                                """))
+                .andExpect(status().isUnauthorized());
+
+        verifyNoInteractions(playlistService);
+    }
+
+    @Test
+    void previewRejectsBlankSetlistId() throws Exception {
+        mockMvc.perform(post("/api/v1/playlist-previews")
+                        .session(authenticatedSession())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"setlistId":" "}
+                                """))
+                .andExpect(status().isBadRequest());
+
+        verifyNoInteractions(playlistService);
+    }
+
+    @Test
     void generatePlaylistReturnsBadRequestWhenRequiredFieldsAreMissing() throws Exception {
         mockMvc.perform(post("/api/v1/playlists/generate")
                         .contentType(MediaType.APPLICATION_JSON)

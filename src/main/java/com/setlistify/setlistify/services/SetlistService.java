@@ -29,17 +29,26 @@ public class SetlistService {
     }
 
     public List<String> getTracksFromSetlist(String setlistId) {
+        return getSetlistTracks(setlistId).songs();
+    }
+
+    SetlistTracks getSetlistTracks(String setlistId) {
         ConcertRecord concert = setlistFmClient.fetchSingleSetlist(setlistId);
         if (concert == null || concert.sets() == null || concert.sets().set() == null) {
-            return Collections.emptyList();
+            return new SetlistTracks(null, List.of());
         }
-        return concert.sets()
+        String artistName = concert.artist() == null ? null : concert.artist().name();
+        List<String> songs = concert.sets()
                       .set()
                       .stream()
                       .filter(set -> set.song() != null)
                       .flatMap(set -> set.song().stream())
                       .map(SongRecord::name)
                       .toList();
+        return new SetlistTracks(artistName, songs);
+    }
+
+    record SetlistTracks(String artistName, List<String> songs) {
     }
 }
 

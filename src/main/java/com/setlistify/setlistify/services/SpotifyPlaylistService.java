@@ -1,15 +1,23 @@
 package com.setlistify.setlistify.services;
 
 import com.setlistify.setlistify.client.SpotifyClient;
-import com.setlistify.setlistify.model.dto.PlaylistDTOs.NeedsReviewSong;
-import com.setlistify.setlistify.model.dto.PlaylistDTOs.ResultResponse;
-import com.setlistify.setlistify.model.dto.PlaylistDTOs.TrackCandidate;
+import com.setlistify.setlistify.model.dto.PlaylistDTOs.ArtworkImage;
+import com.setlistify.setlistify.model.dto.PlaylistDTOs.CandidateAlbum;
 import com.setlistify.setlistify.model.dto.PlaylistDTOs.CreateRequest;
-import com.setlistify.setlistify.model.dto.SpotifyDTOs.SearchResponse;
+import com.setlistify.setlistify.model.dto.PlaylistDTOs.MatchReason;
+import com.setlistify.setlistify.model.dto.PlaylistDTOs.MatchStatus;
+import com.setlistify.setlistify.model.dto.PlaylistDTOs.NeedsReviewSong;
+import com.setlistify.setlistify.model.dto.PlaylistDTOs.PreviewResponse;
+import com.setlistify.setlistify.model.dto.PlaylistDTOs.ResultResponse;
+import com.setlistify.setlistify.model.dto.PlaylistDTOs.SongReview;
+import com.setlistify.setlistify.model.dto.PlaylistDTOs.TrackCandidate;
 import com.setlistify.setlistify.model.dto.SpotifyDTOs.CreatePlaylistRequest;
 import com.setlistify.setlistify.model.dto.SpotifyDTOs.PlaylistResponse;
+import com.setlistify.setlistify.model.dto.SpotifyDTOs.SearchResponse;
+import com.setlistify.setlistify.model.dto.SpotifyDTOs.SearchResponse.AlbumItem;
 import com.setlistify.setlistify.model.dto.SpotifyDTOs.SearchResponse.ArtistItem;
 import com.setlistify.setlistify.model.dto.SpotifyDTOs.SearchResponse.TrackItem;
+import com.setlistify.setlistify.services.SetlistService.SetlistTracks;
 import org.springframework.stereotype.Service;
 
 import java.text.Normalizer;
@@ -30,6 +38,15 @@ public class SpotifyPlaylistService {
         this.setlistService = setlistService;
     }
 
+    public PreviewResponse previewPlaylist(String setlistId, String accessToken) {
+        SetlistTracks setlist = setlistService.getSetlistTracks(setlistId);
+        if (setlist.songs().isEmpty() || normalize(setlist.artistName()).isEmpty()) {
+            return null;
+        }
+        return new PreviewResponse(setlistId, setlist.artistName(),
+                matchSongs(setlist.songs(), setlist.artistName(), accessToken));
+    }
+
     public ResultResponse generatePlaylistFromSetlist(CreateRequest request, String accessToken) {
         List<String> songs = setlistService.getTracksFromSetlist(request.setlistId());
         if (songs == null || songs.isEmpty()) {
@@ -39,44 +56,11 @@ public class SpotifyPlaylistService {
         List<String> trackUris = new ArrayList<>();
         List<NeedsReviewSong> needsReviewSongs = new ArrayList<>();
         List<String> unmatchedSongs = new ArrayList<>();
-        String normalizedArtist = normalize(request.artistName());
-
-        for (String song : songs) {
-            if (normalize(song).isEmpty()) {
-                unmatchedSongs.add(song == null ? "[missing song name]" : song);
-                continue;
-            }
-
-            String query = String.format("track:%s artist:%s", song, request.artistName());
-            SearchResponse search = spotifyClient.searchTrack(accessToken, query);
-            if (search == null || search.tracks() == null || search.tracks().items() == null) {
-                throw new IllegalStateException("Spotify track search returned an incomplete response");
-            }
-
-            List<TrackItem> candidates = uniqueCandidates(search.tracks().items());
-            List<TrackItem> exactTitleMatches = candidates.stream()
-                    .filter(track -> normalize(track.name()).equals(normalize(song)))
-                    .toList();
-
-            if (exactTitleMatches.isEmpty()) {
-                unmatchedSongs.add(song);
-                continue;
-            }
-
-            List<TrackItem> exactTitleAndArtistMatches = exactTitleMatches.stream()
-                    .filter(track -> hasArtist(track, normalizedArtist))
-                    .toList();
-
-            if (exactTitleAndArtistMatches.size() == 1) {
-                trackUris.add(exactTitleAndArtistMatches.getFirst().uri());
-            } else {
-                List<TrackItem> reviewCandidates = exactTitleAndArtistMatches.isEmpty()
-                        ? exactTitleMatches
-                        : exactTitleAndArtistMatches;
-                needsReviewSongs.add(new NeedsReviewSong(
-                        song,
-                        reviewCandidates.stream().map(SpotifyPlaylistService::toCandidate).toList()
-                ));
+        for (SongReview review : matchSongs(songs, request.artistName(), accessToken)) {
+            switch (review.status()) {
+                case MATCHED -> trackUris.add(review.candidates().getFirst().uri());
+                case NEEDS_REVIEW -> needsReviewSongs.add(new NeedsReviewSong(review.title(), review.candidates()));
+                case UNMATCHED -> unmatchedSongs.add(review.title() == null ? "[missing song name]" : review.title());
             }
         }
 
@@ -110,6 +94,51 @@ public class SpotifyPlaylistService {
         );
     }
 
+    private List<SongReview> matchSongs(List<String> songs, String artistName, String accessToken) {
+        String normalizedArtist = normalize(artistName);
+        List<SongReview> reviews = new ArrayList<>(songs.size());
+        int songId = 0;
+        for (String song : songs) {
+            reviews.add(classifySong(++songId, song, artistName, normalizedArtist, accessToken));
+        }
+        return List.copyOf(reviews);
+    }
+
+    private SongReview classifySong(int songId, String song, String artistName, String normalizedArtist,
+                                    String accessToken) {
+        String normalizedTitle = normalize(song);
+        if (normalizedTitle.isEmpty()) {
+            return new SongReview(songId, song, MatchStatus.UNMATCHED, MatchReason.MISSING_TITLE, List.of());
+        }
+
+        String query = String.format("track:%s artist:%s", song, artistName);
+        SearchResponse search = spotifyClient.searchTrack(accessToken, query);
+        if (search == null || search.tracks() == null || search.tracks().items() == null) {
+            throw new IllegalStateException("Spotify track search returned an incomplete response");
+        }
+
+        List<TrackItem> exactTitleMatches = uniqueCandidates(search.tracks().items()).stream()
+                .filter(track -> normalize(track.name()).equals(normalizedTitle))
+                .toList();
+        if (exactTitleMatches.isEmpty()) {
+            return new SongReview(songId, song, MatchStatus.UNMATCHED, MatchReason.NO_EXACT_TITLE, List.of());
+        }
+
+        List<TrackItem> exactArtistMatches = exactTitleMatches.stream()
+                .filter(track -> hasArtist(track, normalizedArtist))
+                .toList();
+        if (exactArtistMatches.size() == 1) {
+            return new SongReview(songId, song, MatchStatus.MATCHED, MatchReason.UNIQUE_EXACT_MATCH,
+                    List.of(toCandidate(exactArtistMatches.getFirst())));
+        }
+
+        boolean artistMismatch = exactArtistMatches.isEmpty();
+        List<TrackItem> candidates = artistMismatch ? exactTitleMatches : exactArtistMatches;
+        MatchReason reason = artistMismatch ? MatchReason.ARTIST_MISMATCH : MatchReason.MULTIPLE_RECORDINGS;
+        return new SongReview(songId, song, MatchStatus.NEEDS_REVIEW, reason,
+                candidates.stream().map(SpotifyPlaylistService::toCandidate).toList());
+    }
+
     private static List<TrackItem> uniqueCandidates(List<TrackItem> items) {
         Set<String> seenUris = new HashSet<>();
         List<TrackItem> unique = new ArrayList<>();
@@ -140,7 +169,21 @@ public class SpotifyPlaylistService {
                         .filter(Objects::nonNull)
                         .toList();
         String spotifyUrl = track.externalUrls() == null ? null : track.externalUrls().get("spotify");
-        return new TrackCandidate(track.name(), artists, track.uri(), spotifyUrl);
+        return new TrackCandidate(track.name(), artists, track.uri(), spotifyUrl, toCandidateAlbum(track.album()));
+    }
+
+    private static CandidateAlbum toCandidateAlbum(AlbumItem album) {
+        if (album == null) {
+            return null;
+        }
+        List<ArtworkImage> images = album.images() == null
+                ? List.of()
+                : album.images().stream()
+                        .filter(image -> image != null && image.url() != null && !image.url().isBlank())
+                        .map(image -> new ArtworkImage(image.url(), image.width(), image.height()))
+                        .toList();
+        String spotifyUrl = album.externalUrls() == null ? null : album.externalUrls().get("spotify");
+        return new CandidateAlbum(album.name(), spotifyUrl, images);
     }
 
     private static String normalize(String value) {
