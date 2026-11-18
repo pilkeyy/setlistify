@@ -27,9 +27,13 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 @Service
 public class SpotifyPlaylistService {
+    private static final Pattern REMIX_SUFFIX = Pattern.compile(
+            "(?iu)\\s*(?:[-–—]\\s*remix|\\(\\s*remix\\s*\\)|\\[\\s*remix\\s*\\])\\s*$");
+
     private final SpotifyClient spotifyClient;
     private final SetlistService setlistService;
 
@@ -112,18 +116,31 @@ public class SpotifyPlaylistService {
         }
 
         String query = String.format("track:%s artist:%s", song, artistName);
+        List<TrackItem> candidates = searchCandidates(accessToken, query);
+        SongReview review = classifyCandidates(songId, song, normalizedTitle, normalizedArtist, candidates);
+        if (review.reason() != MatchReason.NO_EXACT_TITLE && review.reason() != MatchReason.ARTIST_MISMATCH) {
+            return review;
+        }
+
+        List<TrackItem> combinedCandidates = new ArrayList<>(candidates);
+        combinedCandidates.addAll(searchCandidates(accessToken, "track:" + song));
+        return classifyCandidates(songId, song, normalizedTitle, normalizedArtist, combinedCandidates);
+    }
+
+    private List<TrackItem> searchCandidates(String accessToken, String query) {
         SearchResponse search = spotifyClient.searchTrack(accessToken, query);
         if (search == null || search.tracks() == null || search.tracks().items() == null) {
             throw new IllegalStateException("Spotify track search returned an incomplete response");
         }
+        return search.tracks().items();
+    }
 
-        List<TrackItem> exactTitleMatches = uniqueCandidates(search.tracks().items()).stream()
+    private static SongReview classifyCandidates(int songId, String song, String normalizedTitle,
+                                                 String normalizedArtist, List<TrackItem> rawCandidates) {
+        List<TrackItem> candidates = uniqueCandidates(rawCandidates);
+        List<TrackItem> exactTitleMatches = candidates.stream()
                 .filter(track -> normalize(track.name()).equals(normalizedTitle))
                 .toList();
-        if (exactTitleMatches.isEmpty()) {
-            return new SongReview(songId, song, MatchStatus.UNMATCHED, MatchReason.NO_EXACT_TITLE, List.of());
-        }
-
         List<TrackItem> exactArtistMatches = exactTitleMatches.stream()
                 .filter(track -> hasArtist(track, normalizedArtist))
                 .toList();
@@ -131,12 +148,34 @@ public class SpotifyPlaylistService {
             return new SongReview(songId, song, MatchStatus.MATCHED, MatchReason.UNIQUE_EXACT_MATCH,
                     List.of(toCandidate(exactArtistMatches.getFirst())));
         }
+        if (!exactArtistMatches.isEmpty()) {
+            return needsReview(songId, song, MatchReason.MULTIPLE_RECORDINGS, exactArtistMatches);
+        }
 
-        boolean artistMismatch = exactArtistMatches.isEmpty();
-        List<TrackItem> candidates = artistMismatch ? exactTitleMatches : exactArtistMatches;
-        MatchReason reason = artistMismatch ? MatchReason.ARTIST_MISMATCH : MatchReason.MULTIPLE_RECORDINGS;
+        List<TrackItem> creditedRemixes = candidates.stream()
+                .filter(track -> isRemixOf(track.name(), normalizedTitle))
+                .filter(track -> hasArtist(track, normalizedArtist))
+                .toList();
+        if (!creditedRemixes.isEmpty()) {
+            return needsReview(songId, song, MatchReason.TITLE_VARIANT, creditedRemixes);
+        }
+        if (!exactTitleMatches.isEmpty()) {
+            return needsReview(songId, song, MatchReason.ARTIST_MISMATCH, exactTitleMatches);
+        }
+        return new SongReview(songId, song, MatchStatus.UNMATCHED, MatchReason.NO_EXACT_TITLE, List.of());
+    }
+
+    private static SongReview needsReview(int songId, String song, MatchReason reason, List<TrackItem> candidates) {
         return new SongReview(songId, song, MatchStatus.NEEDS_REVIEW, reason,
                 candidates.stream().map(SpotifyPlaylistService::toCandidate).toList());
+    }
+
+    private static boolean isRemixOf(String trackName, String normalizedTitle) {
+        if (trackName == null) {
+            return false;
+        }
+        var suffix = REMIX_SUFFIX.matcher(trackName);
+        return suffix.find() && normalize(trackName.substring(0, suffix.start())).equals(normalizedTitle);
     }
 
     private static List<TrackItem> uniqueCandidates(List<TrackItem> items) {

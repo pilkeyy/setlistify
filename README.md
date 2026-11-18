@@ -55,9 +55,9 @@ The implementation stores the access token in the HTTP session, but does not ref
 - Spotify and setlist.fm HTTP calls are isolated in separate client classes; service classes handle the multi-call workflow.
 - API payloads use Java record DTOs, including nested records for Spotify search results and setlist.fm concert data.
 - The PKCE verifier and OAuth state live in the HTTP session across the redirect. The access token is kept there for subsequent requests, so authentication depends on session continuity; the application is not stateless.
-- Track searches use `track:{song} artist:{artist}` and request five results. Matching ignores case, accents, punctuation, and spacing but preserves version labels such as “Live” and “Remastered.” A single exact title-and-artist match is added automatically; title matches with a different artist or multiple matching recordings are returned for review. Successful searches with no exact title match are reported as unmatched.
+- Track searches start with `track:{song} artist:{artist}` and request five results. A single exact normalized title match with the artist anywhere in the track credits is eligible for automatic selection. A credited remix with a matching base title is offered for review. If neither is found, the matcher tries one title-only search before reporting an artist mismatch or an unmatched song. Multiple exact title-and-artist recordings also go to review.
 - Playlist creation happens after matching. If there are no confirmed tracks, no Spotify playlist is created; Spotify search or playlist-write errors are still upstream failures rather than unmatched songs.
-- Spotify searches currently run sequentially, one request per setlist song. This keeps the workflow straightforward, but playlist generation time grows with the number of songs and Spotify's response times; parallel lookups would need to account for API rate limits.
+- Spotify searches run sequentially, with up to two requests per song. Playlist generation time grows with the number of songs and Spotify's response times; parallel lookups would need to account for API rate limits.
 - The service adds Spotify URIs through `POST /playlists/{playlist_id}/items`, in batches of at most 100.
 
 ## Tech Stack

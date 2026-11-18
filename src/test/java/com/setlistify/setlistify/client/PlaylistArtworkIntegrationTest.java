@@ -10,6 +10,8 @@ import com.setlistify.setlistify.model.dto.SetlistFmDTOs.SongRecord;
 import com.setlistify.setlistify.services.SetlistService;
 import com.setlistify.setlistify.services.SpotifyPlaylistService;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockHttpSession;
@@ -121,7 +123,13 @@ class PlaylistArtworkIntegrationTest {
                   "name":"Cover","uri":"spotify:track:cover","artists":[{"name":"Other Artist"}]
                 }]}}
                 """);
+        expectSearchQuery(spotify, "track%3ACover", """
+                {"tracks":{"items":[]}}
+                """);
         expectSearch(spotify, "Lost", """
+                {"tracks":{"items":[]}}
+                """);
+        expectSearchQuery(spotify, "track%3ALost", """
                 {"tracks":{"items":[]}}
                 """);
         expectSearch(spotify, "Opening%20%2B%20%7BLive%7D", openingTrack);
@@ -167,8 +175,61 @@ class PlaylistArtworkIntegrationTest {
         spotify.verify();
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void previewsCreditedRemixEvenWhenTheArtistFilterMissesIt(boolean foundByArtistSearch) throws Exception {
+        RestClient.Builder apiBuilder = RestClient.builder();
+        MockRestServiceServer spotify = MockRestServiceServer.bindTo(apiBuilder).build();
+        String noMeConoce = """
+                {"tracks":{"items":[
+                  {"name":"No Me Conoce","uri":"spotify:track:original","artists":[{"name":"JHAYCO"}]},
+                  {"name":"No Me Conoce - Remix","uri":"spotify:track:remix",
+                    "artists":[{"name":"JHAYCO"},{"name":"J Balvin"},{"name":"Bad Bunny"}]},
+                  {"name":"No Me Conoce (Remix)","uri":"spotify:track:uncredited-remix",
+                    "artists":[{"name":"Other Artist"}]}
+                ]}}
+                """;
+        expectSearchQuery(spotify, "track%3ANo%20Me%20Conoce%20artist%3ABad%20Bunny",
+                foundByArtistSearch ? noMeConoce : """
+                        {"tracks":{"items":[]}}
+                        """);
+        if (!foundByArtistSearch) {
+            expectSearchQuery(spotify, "track%3ANo%20Me%20Conoce", noMeConoce);
+        }
+
+        SetlistFmClient setlistFm = mock(SetlistFmClient.class);
+        when(setlistFm.fetchSingleSetlist("concert")).thenReturn(new ConcertRecord(
+                "concert", null, new ArtistRecord("Bad Bunny"), null,
+                new SetsWrapper(List.of(new SetRecord(List.of(new SongRecord("No Me Conoce")))))
+        ));
+        SpotifyOauthConfig config = new SpotifyOauthConfig("test-client", "http://127.0.0.1/callback", "");
+        SpotifyClient client = new SpotifyClient(config, RestClient.builder(), apiBuilder);
+        PlaylistController controller = new PlaylistController(new SpotifyPlaylistService(client, new SetlistService(setlistFm)));
+        MockHttpSession session = new MockHttpSession();
+        session.setAttribute("access_token", "test-token");
+
+        MockMvcBuilders.standaloneSetup(controller).build()
+                .perform(post("/api/v1/playlist-previews")
+                        .session(session)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"setlistId":"concert"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.songs[0].status").value("NEEDS_REVIEW"))
+                .andExpect(jsonPath("$.songs[0].reason").value("TITLE_VARIANT"))
+                .andExpect(jsonPath("$.songs[0].candidates.length()").value(1))
+                .andExpect(jsonPath("$.songs[0].candidates[0].name").value("No Me Conoce - Remix"))
+                .andExpect(jsonPath("$.songs[0].candidates[0].artists[2]").value("Bad Bunny"));
+        spotify.verify();
+    }
+
     private static void expectSearch(MockRestServiceServer spotify, String encodedTitle, String response) {
-        spotify.expect(requestTo(containsString("/search?q=track%3A" + encodedTitle + "%20artist%3AB%C3%A1nd")))
+        expectSearchQuery(spotify, "track%3A" + encodedTitle + "%20artist%3AB%C3%A1nd", response);
+    }
+
+    private static void expectSearchQuery(MockRestServiceServer spotify, String encodedQuery, String response) {
+        spotify.expect(requestTo(containsString("/search?q=" + encodedQuery + "&type=track")))
                 .andExpect(method(HttpMethod.GET))
                 .andRespond(withSuccess(response, MediaType.APPLICATION_JSON));
     }
