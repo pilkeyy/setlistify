@@ -31,8 +31,11 @@ import java.util.regex.Pattern;
 
 @Service
 public class SpotifyPlaylistService {
-    private static final Pattern REMIX_SUFFIX = Pattern.compile(
-            "(?iu)\\s*(?:[-–—]\\s*remix|\\(\\s*remix\\s*\\)|\\[\\s*remix\\s*\\])\\s*$");
+    private static final String VERSION_LABEL = "bonus(?:\\s+track)?|remix|live|acoustic|demo|instrumental"
+            + "|remaster(?:ed)?(?:\\s+\\d{4})?|\\d{4}\\s+remaster(?:ed)?";
+    private static final Pattern VERSION_SUFFIX = Pattern.compile(
+            "(?iu)\\s*(?:[-–—]\\s*(?:%1$s)|\\(\\s*(?:%1$s)\\s*\\)|\\[\\s*(?:%1$s)\\s*\\])\\s*$"
+                    .formatted(VERSION_LABEL));
 
     private final SpotifyClient spotifyClient;
     private final SetlistService setlistService;
@@ -152,12 +155,12 @@ public class SpotifyPlaylistService {
             return needsReview(songId, song, MatchReason.MULTIPLE_RECORDINGS, exactArtistMatches);
         }
 
-        List<TrackItem> creditedRemixes = candidates.stream()
-                .filter(track -> isRemixOf(track.name(), normalizedTitle))
+        List<TrackItem> creditedVariants = candidates.stream()
+                .filter(track -> hasMatchingBaseTitle(track.name(), normalizedTitle))
                 .filter(track -> hasArtist(track, normalizedArtist))
                 .toList();
-        if (!creditedRemixes.isEmpty()) {
-            return needsReview(songId, song, MatchReason.TITLE_VARIANT, creditedRemixes);
+        if (!creditedVariants.isEmpty()) {
+            return needsReview(songId, song, MatchReason.TITLE_VARIANT, creditedVariants);
         }
         if (!exactTitleMatches.isEmpty()) {
             return needsReview(songId, song, MatchReason.ARTIST_MISMATCH, exactTitleMatches);
@@ -170,11 +173,11 @@ public class SpotifyPlaylistService {
                 candidates.stream().map(SpotifyPlaylistService::toCandidate).toList());
     }
 
-    private static boolean isRemixOf(String trackName, String normalizedTitle) {
+    private static boolean hasMatchingBaseTitle(String trackName, String normalizedTitle) {
         if (trackName == null) {
             return false;
         }
-        var suffix = REMIX_SUFFIX.matcher(trackName);
+        var suffix = VERSION_SUFFIX.matcher(trackName);
         return suffix.find() && normalize(trackName.substring(0, suffix.start())).equals(normalizedTitle);
     }
 
