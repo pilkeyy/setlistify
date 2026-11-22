@@ -26,7 +26,27 @@ public class SpotifyDTOs {
         public record TracksWrapper(List<TrackItem> items) {
         }
 
-        public record TrackItem(String id, String name, String uri) {
+        public record TrackItem(
+                String id,
+                String name,
+                String uri,
+                List<ArtistItem> artists,
+                AlbumItem album,
+                @JsonProperty("external_urls") Map<String, String> externalUrls
+        ) {
+        }
+
+        public record ArtistItem(String name) {
+        }
+
+        public record AlbumItem(
+                String name,
+                List<ImageItem> images,
+                @JsonProperty("external_urls") Map<String, String> externalUrls
+        ) {
+        }
+
+        public record ImageItem(String url, Integer width, Integer height) {
         }
     }
 

@@ -1,17 +1,20 @@
 package com.setlistify.setlistify.controller;
 
 import com.setlistify.setlistify.config.SpotifyOauthConfig;
-import com.setlistify.setlistify.model.dto.SpotifyDTOs.TokenResponse;
 import com.setlistify.setlistify.services.SpotifyAuthService;
 import com.setlistify.setlistify.util.PkceUtil;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpSession;
-import org.springframework.http.HttpHeaders;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.client.RestClientException;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import java.net.URI;
@@ -22,10 +25,13 @@ import java.util.UUID;
 public class AuthController {
     private final SpotifyOauthConfig oauthConfig;
     private final SpotifyAuthService spotifyAuthService;
+    private final URI frontendUrl;
 
-    public AuthController(SpotifyOauthConfig oauthConfig, SpotifyAuthService spotifyAuthService) {
+    public AuthController(SpotifyOauthConfig oauthConfig, SpotifyAuthService spotifyAuthService,
+                          @Value("${app.frontend-url:http://127.0.0.1:5173}") URI frontendUrl) {
         this.oauthConfig = oauthConfig;
         this.spotifyAuthService = spotifyAuthService;
+        this.frontendUrl = frontendUrl;
     }
 
     @GetMapping("/login")
@@ -52,33 +58,51 @@ public class AuthController {
                                                    .build()
                                                    .toUri();
 
-        HttpHeaders headers = new HttpHeaders();
-        headers.setLocation(authorizationUri);
-
-        return new ResponseEntity<>(headers, HttpStatus.FOUND);
+        return ResponseEntity.status(HttpStatus.FOUND)
+                .location(authorizationUri)
+                .cacheControl(CacheControl.noStore())
+                .build();
     }
 
     @GetMapping("/callback")
-    public ResponseEntity<String> handleSpotifyCallback(
+    public ResponseEntity<Void> handleSpotifyCallback(
             @RequestParam(value = "code", required = false) String code,
             @RequestParam(value = "state", required = false) String state,
             @RequestParam(value = "error", required = false) String error,
-            HttpSession session) {
-        if (error != null) {
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("Authorization failed: " + error);
+            HttpServletRequest request) {
+        HttpSession session = request.getSession(false);
+        if (session == null) {
+            return returnToFrontend("failed");
         }
         String savedState = (String) session.getAttribute("oauth_state");
         if (state == null || !state.equals(savedState)) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Invalid state parameter.");
+            return returnToFrontend("failed");
         }
         String codeVerifier = (String) session.getAttribute("spotify_verifier");
-        if (code == null || codeVerifier == null) {
-            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("Missing authorization code or code verifier");
+        session.removeAttribute("oauth_state");
+        session.removeAttribute("spotify_verifier");
+        if (error != null || code == null || code.isBlank() || codeVerifier == null) {
+            return returnToFrontend("failed");
         }
-        TokenResponse tokenResponse = spotifyAuthService.exchangeCodeForTokens(code, codeVerifier);
 
-        session.setAttribute("access_token", tokenResponse.accessToken());
-        return ResponseEntity.ok("Successfully authenticated with Spotify!");
+        try {
+            spotifyAuthService.exchangeCodeForTokens(code, codeVerifier, session);
+            request.changeSessionId();
+            return returnToFrontend("connected");
+        } catch (RestClientException | ResponseStatusException exception) {
+            return returnToFrontend("failed");
+        }
+    }
+
+    private ResponseEntity<Void> returnToFrontend(String result) {
+        URI location = UriComponentsBuilder.fromUri(frontendUrl)
+                .replaceQueryParam("spotify", result)
+                .build(true)
+                .toUri();
+        return ResponseEntity.status(HttpStatus.SEE_OTHER)
+                .location(location)
+                .cacheControl(CacheControl.noStore())
+                .header("Referrer-Policy", "no-referrer")
+                .build();
     }
 }
-
