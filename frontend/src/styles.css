@@ -320,6 +320,28 @@ h1 span {
   border-top: 1px solid var(--line);
 }
 
+.concert-tracks-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+}
+
+.concert-tracks-heading h3 {
+  margin: 0;
+}
+
+.back-to-concerts {
+  min-height: 44px;
+  padding-inline: .9rem;
+  border: 1px solid #696969;
+  border-radius: .55rem;
+  background: #242424;
+  color: var(--ink);
+  cursor: pointer;
+}
+
 .results-heading h3 {
   margin: 0.4rem 0 0;
   font-family: 'Space Grotesk', 'Avenir Next', sans-serif;
@@ -569,8 +591,9 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline-color: #1ed
 .preview-label { margin-left: auto; color: #b7b7b7; font-size: .75rem; font-weight: 400; }
 .preview-tracks { margin: .9rem 0 0; padding-left: 1.5rem; color: #d7d7d7; font-size: .85rem; line-height: 2; }
 .track-scroll {
-  max-height: min(20rem, 45vh);
+  max-block-size: min(20rem, 45dvh);
   overflow-y: auto;
+  scrollbar-gutter: stable;
   border: 1px solid #696969;
   border-radius: .65rem;
   padding: .25rem 1rem 1rem;
@@ -580,23 +603,15 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline-color: #1ed
   outline-offset: 3px;
 }
 
-.more-songs {
-  margin-top: .4rem;
-}
-
-.more-songs > summary {
-  padding-block: .55rem;
-  cursor: pointer;
-  color: #d7d7d7;
-}
-
-.more-songs > summary:focus-visible {
-  outline: 3px solid #1ed760;
-  outline-offset: 3px;
-}
-
 .match-review {
   margin-top: 1.25rem;
+  container: match-review / inline-size;
+}
+
+.review-layout {
+  display: grid;
+  gap: 1rem;
+  align-items: start;
 }
 
 .match-review .search-button {
@@ -649,15 +664,22 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline-color: #1ed
   color: #bdbdbd;
 }
 
-.candidate-option + .candidate-option {
-  margin-top: .75rem;
+.candidate-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
+  gap: .65rem 1rem;
 }
 
 .candidate-option label, .skip-choice {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: .5rem;
   cursor: pointer;
+}
+
+.song-choices input {
+  flex: 0 0 auto;
+  accent-color: #1ed760;
 }
 
 .candidate-details {
@@ -682,4 +704,58 @@ button:focus-visible, a:focus-visible, input:focus-visible { outline-color: #1ed
 
 .skip-choice {
   margin-top: .75rem;
+}
+
+.make-playlist {
+  display: grid;
+  gap: .6rem;
+}
+
+.make-playlist h4, .make-playlist p {
+  margin: 0;
+}
+
+.make-playlist input {
+  min-width: 0;
+  min-height: 48px;
+  padding-inline: .85rem;
+  border: 1px solid #767676;
+  border-radius: .55rem;
+  background: #242424;
+  color: #f5f5f5;
+  font: inherit;
+  font-size: max(1rem, 1em);
+}
+
+.make-playlist button, .make-playlist .spotify-login {
+  min-height: 48px;
+  justify-self: start;
+}
+
+.playlist-result-link {
+  color: #1ed760;
+}
+
+@media (min-width: 851px) {
+  .main-content[data-concert-selected="true"] {
+    inline-size: min(100rem, calc(100% - 3rem));
+    grid-template-columns: minmax(15rem, 24rem) minmax(0, 1fr);
+    gap: clamp(1.75rem, 4vw, 4rem);
+  }
+}
+
+@container match-review (min-width: 52rem) {
+  .review-layout {
+    grid-template-columns: minmax(0, 1fr) minmax(16rem, .42fr);
+    gap: 1.25rem;
+  }
+
+  .review-layout > .track-scroll {
+    max-block-size: min(32rem, 55dvh);
+  }
+
+  .make-playlist {
+    padding-inline-start: 1.25rem;
+    border-inline-start: 1px solid var(--line);
+  }
 }

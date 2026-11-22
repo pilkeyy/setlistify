@@ -12,6 +12,14 @@ public class PlaylistDTOs {
     public record PreviewResponse(String setlistId, String artistName, List<SongReview> songs) {
     }
 
+    public record ReviewPreviewResponse(String reviewId, String setlistId, String artistName, List<SongReview> songs) {}
+
+    public record ConfirmPlaylistRequest(String reviewId, String playlistName, List<TrackSelection> selections) {}
+
+    public record TrackSelection(int songId, String trackUri) {}
+
+    public record ConfirmPlaylistResponse(String playlistId, String playlistName, String spotifyUrl, String message) {}
+
     public record SongReview(
             int songId,
             String title,

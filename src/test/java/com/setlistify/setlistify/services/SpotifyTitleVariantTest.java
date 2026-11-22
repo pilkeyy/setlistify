@@ -57,6 +57,26 @@ class SpotifyTitleVariantTest {
     }
 
     @Test
+    void prefersFeaturedCreditOverUncreditedExactTitle() {
+        String song = "Tú no vive así";
+        String spotifyTitle = "Tu No Vive Asi (feat. Mambo Kingz & DJ Luian)";
+        TrackItem featuredTrack = new TrackItem("featured", spotifyTitle, "spotify:track:featured",
+                List.of(new ArtistItem("Arcángel"), new ArtistItem("Bad Bunny"),
+                        new ArtistItem("Mambo Kingz"), new ArtistItem("DJ Luian")), null, null);
+        when(setlists.getSetlistTracks("concert")).thenReturn(new SetlistTracks("Bad Bunny", List.of(song)));
+        when(spotify.searchTrack("token", "track:" + song + " artist:Bad Bunny"))
+                .thenReturn(searchResult("Tu No Vive Así", "Quimico Ultra Mega"));
+        when(spotify.searchTrack("token", "track:" + song))
+                .thenReturn(new SearchResponse(new TracksWrapper(List.of(featuredTrack))));
+
+        SongReview row = service.previewPlaylist("concert", "token").songs().getFirst();
+
+        assertEquals(MatchStatus.NEEDS_REVIEW, row.status());
+        assertEquals(MatchReason.TITLE_VARIANT, row.reason());
+        assertEquals(List.of(spotifyTitle), row.candidates().stream().map(track -> track.name()).toList());
+    }
+
+    @Test
     void leavesUnrecognizedSubtitleAndUncreditedBonusUnmatched() {
         when(spotify.searchTrack("token", ARTIST_QUERY))
                 .thenReturn(searchResult("Logo (Of My Heart)", "OsamaSon"));

@@ -23,9 +23,9 @@ export function readSpotifyReturn() {
   return { ...context, result };
 }
 
-function formatConcertDate(value) {
+function formatConcertDate(value, fallback = 'Date unavailable') {
   if (typeof value !== 'string') {
-    return 'Date unavailable';
+    return fallback;
   }
 
   const match = /^(\d{2})-(\d{2})-(\d{4})$/.exec(value);
@@ -60,6 +60,7 @@ function App({ spotifyReturn = {} }) {
   const [trackStatus, setTrackStatus] = useState('idle');
   const [trackAttempt, setTrackAttempt] = useState(0);
   const reviewHeading = useRef(null);
+  const selectedConcert = shows.find((show) => show.id === selectedShow);
 
   useEffect(() => {
     if (selectedShow && reviewHeading.current) {
@@ -175,7 +176,7 @@ function App({ spotifyReturn = {} }) {
         </a>
       </header>
 
-      <main id="home" className="main-content">
+      <main id="home" className="main-content" data-concert-selected={Boolean(selectedShow)}>
         <section className="intro" aria-labelledby="page-title">
           <p className="eyebrow">A concert setlist, made yours</p>
           <h1 id="page-title">Pick a show.<br /><span>Keep the set.</span></h1>
@@ -280,8 +281,10 @@ function App({ spotifyReturn = {} }) {
           )}
           {selectedShow && (
             <section className="results" aria-labelledby="tracks-title">
-              <h3 id="tracks-title" ref={reviewHeading} tabIndex="-1">Songs from this show</h3>
-              <button className="show-option" type="button" onClick={handleBackToShows}>Back to concerts</button>
+              <div className="concert-tracks-heading">
+                <h3 id="tracks-title" ref={reviewHeading} tabIndex="-1">Songs from this show</h3>
+                <button className="back-to-concerts" type="button" onClick={handleBackToShows}>Back to concerts</button>
+              </div>
               <div role="status">
                 {trackStatus === 'loading' && <p>Loading songs…</p>}
                 {trackStatus === 'error' && <p>Could not load songs. Please try again.</p>}
@@ -290,7 +293,14 @@ function App({ spotifyReturn = {} }) {
               </div>
               {trackStatus === 'error' && <button type="button" onClick={() => setTrackAttempt((attempt) => attempt + 1)}>Try again</button>}
               {trackStatus === 'success' && tracks.length > 0 && (
-                <MatchReview key={selectedShow} setlistId={selectedShow} tracks={tracks} onLogin={rememberConcertForLogin} />
+                <MatchReview
+                  key={selectedShow}
+                  setlistId={selectedShow}
+                  concertDate={formatConcertDate(selectedConcert?.eventDate, '')}
+                  venueName={selectedConcert?.venueName}
+                  tracks={tracks}
+                  onLogin={rememberConcertForLogin}
+                />
               )}
             </section>
           )}

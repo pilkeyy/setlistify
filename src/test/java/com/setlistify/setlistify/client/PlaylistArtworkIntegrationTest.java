@@ -1,5 +1,6 @@
 package com.setlistify.setlistify.client;
 
+import com.jayway.jsonpath.JsonPath;
 import com.setlistify.setlistify.config.SpotifyOauthConfig;
 import com.setlistify.setlistify.controller.PlaylistController;
 import com.setlistify.setlistify.model.dto.SetlistFmDTOs.ArtistRecord;
@@ -16,6 +17,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockHttpSession;
+import org.springframework.test.json.JsonCompareMode;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.client.RestClient;
@@ -25,6 +27,7 @@ import java.util.List;
 import static org.hamcrest.Matchers.containsString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.content;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
@@ -223,6 +226,71 @@ class PlaylistArtworkIntegrationTest {
                 .andExpect(jsonPath("$.songs[0].candidates.length()").value(1))
                 .andExpect(jsonPath("$.songs[0].candidates[0].name").value("No Me Conoce - Remix"))
                 .andExpect(jsonPath("$.songs[0].candidates[0].artists[2]").value("Bad Bunny"));
+        spotify.verify();
+    }
+
+    @Test
+    void createsPrivatePlaylistFromValidatedSelectionsInSetlistOrderOnlyOnce() throws Exception {
+        RestClient.Builder api = RestClient.builder();
+        MockRestServiceServer spotify = MockRestServiceServer.bindTo(api).build();
+        expectSearchQuery(spotify, "track%3ATiti%20Me%20Pregunto%20artist%3ABad%20Bunny", """
+                {"tracks":{"items":[{"name":"Tití Me Preguntó","uri":"spotify:track:titi",
+                "artists":[{"name":"Bad Bunny"}]}]}}
+                """);
+        expectSearchQuery(spotify, "track%3AEoO%20artist%3ABad%20Bunny", """
+                {"tracks":{"items":[
+                {"name":"EoO","uri":"spotify:track:album","artists":[{"name":"Bad Bunny"}]},
+                {"name":"EoO","uri":"spotify:track:single","artists":[{"name":"Bad Bunny"}]}]}}
+                """);
+        expectSearchQuery(spotify, "track%3ADakiti%20artist%3ABad%20Bunny", """
+                {"tracks":{"items":[{"name":"Dákiti","uri":"spotify:track:dakiti",
+                "artists":[{"name":"Bad Bunny"}]}]}}
+                """);
+        spotify.expect(requestTo("https://api.spotify.com/v1/me/playlists"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(content().json("""
+                        {"name":"Bad Bunny setlist","public":false}
+                        """))
+                .andRespond(withSuccess("""
+                        {"id":"newPlaylist","name":"Bad Bunny setlist"}
+                        """, MediaType.APPLICATION_JSON));
+        spotify.expect(requestTo("https://api.spotify.com/v1/playlists/newPlaylist/items"))
+                .andExpect(method(HttpMethod.POST))
+                .andExpect(content().json("""
+                        {"uris":["spotify:track:titi","spotify:track:single"]}
+                        """, JsonCompareMode.STRICT))
+                .andRespond(withSuccess("{}", MediaType.APPLICATION_JSON));
+
+        SetlistFmClient setlistFm = mock(SetlistFmClient.class);
+        when(setlistFm.fetchSingleSetlist("concert")).thenReturn(new ConcertRecord(
+                "concert", null, new ArtistRecord("Bad Bunny"), null, new SetsWrapper(List.of(
+                        new SetRecord(List.of(new SongRecord("Titi Me Pregunto"), new SongRecord("EoO"), new SongRecord("Dakiti")))
+                ))
+        ));
+        SpotifyClient client = new SpotifyClient(new SpotifyOauthConfig("test-client", "http://127.0.0.1/callback", ""),
+                RestClient.builder(), api);
+        var mvc = MockMvcBuilders.standaloneSetup(new PlaylistController(
+                new SpotifyPlaylistService(client, new SetlistService(setlistFm)), new SpotifyAuthService(client))).build();
+        MockHttpSession session = new MockHttpSession();
+        session.setAttribute("access_token", "test-token");
+
+        String preview = mvc.perform(post("/api/v1/playlist-previews").session(session).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"setlistId\":\"concert\"}"))
+                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+        String reviewId = JsonPath.read(preview, "$.reviewId");
+        String valid = """
+                {"reviewId":"%s","playlistName":"Bad Bunny setlist","selections":[
+                {"songId":2,"trackUri":"spotify:track:single"},{"songId":1,"trackUri":"spotify:track:titi"}]}
+                """.formatted(reviewId);
+
+        mvc.perform(post("/api/v1/playlists").session(session).contentType(MediaType.APPLICATION_JSON)
+                        .content(valid.replace("spotify:track:titi", "spotify:track:dakiti")))
+                .andExpect(status().isUnprocessableEntity());
+        mvc.perform(post("/api/v1/playlists").session(session).contentType(MediaType.APPLICATION_JSON).content(valid))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.spotifyUrl").value("https://open.spotify.com/playlist/newPlaylist"));
+        mvc.perform(post("/api/v1/playlists").session(session).contentType(MediaType.APPLICATION_JSON).content(valid))
+                .andExpect(status().isConflict());
         spotify.verify();
     }
 

@@ -2,6 +2,12 @@
 
 Setlistify turns concert setlists into Spotify playlists. Its Spring Boot backend integrates setlist.fm and Spotify, using OAuth 2.0 with PKCE to authorize playlist creation from live-performance tracklists.
 
+## Demo
+
+This walkthrough shows the React app searching for a Bad Bunny concert, reviewing recordings, and displaying the playlist result. It uses sample API responses, including a simulated Spotify save, so it can be viewed without signing in.
+
+![Setlistify demo showing concert search, track review, and the playlist result with sample data](docs/setlistify-demo.gif)
+
 ## How It Works
 
 **Search artist → Select a concert → Retrieve setlist songs → Match tracks on Spotify → Create playlist**
@@ -12,10 +18,11 @@ The API exposes these operations:
 
 - `GET /api/v1/setlists/search?artist={name}` returns concert summaries from setlist.fm.
 - `GET /api/v1/setlists/{setlistId}/tracks` returns song names from a setlist.
-- `POST /api/v1/playlist-previews` takes `{"setlistId":"…"}` and uses the signed-in Spotify session. It returns `200` with the concert artist and songs in setlist order. Each row has a one-based `songId` within that response, its title, a status (`MATCHED`, `NEEDS_REVIEW`, or `UNMATCHED`), a reason, and Spotify candidates with optional album artwork. The endpoint performs catalog reads only. It returns `422` if the source setlist has no songs or usable artist. The client holds the response for the current review.
+- `POST /api/v1/playlist-previews` takes `{"setlistId":"…"}` and returns `200` with a review ID, the concert artist, and songs in setlist order. Each row has a one-based `songId`, title, match status, reason, and candidates with optional artwork. The server keeps the allowed candidate URIs for one active review in the Spotify session. The review ID is valid for 30 minutes. Preview only reads from Spotify.
+- `POST /api/v1/playlists` takes `reviewId`, `playlistName`, and `selections` containing `{songId, trackUri}` pairs. It validates the selected candidate for each song, skips omitted rows, and creates a private Spotify playlist in concert order. It returns `201` with the playlist link when Spotify confirms all writes. If adding tracks fails after creation, the error response includes a link to the playlist so the user can inspect it.
 - `POST /api/v1/playlists/generate` takes a setlist ID, artist name, playlist name, and optional public/private choice. It classifies Spotify search results, creates a playlist only when at least one track is confirmed, and returns the playlist URL plus songs that were unmatched or need review. If no track is confirmed, it returns `422` without creating a playlist.
 
-The React frontend supports artist search, concert selection, Spotify login, and draft track review. The playlist generation endpoint is available separately for API clients.
+In React, users search for an artist, choose a concert, sign in to Spotify, review the matches, and choose **Make playlist** to save the selected tracks.
 
 ## Features
 
@@ -104,9 +111,9 @@ The backend has a Spring Boot context test and focused tests for playlist HTTP r
 
 ## Current Limitations
 
-- Track review choices live in the current browser view. Saving those choices to a playlist is planned.
+- Each Spotify session has one active review. A new preview replaces it, and a valid creation attempt consumes it. An interrupted or partial Spotify write has no automatic retry.
 - The app has no logout endpoint.
-- Spotify searches still run sequentially, so generation time increases with setlist length. Handling API rate limits and partial failures during batched playlist writes remains future work.
+- Spotify searches run sequentially, so preview time increases with setlist length.
 - The project is configured for local development.
 
 ## Roadmap
@@ -118,7 +125,6 @@ Planned work, not implemented yet:
 - Expand automated unit and integration testing.
 - Configure outbound HTTP timeouts and handle Spotify `429` responses using `Retry-After` before considering concurrent track lookups.
 - Add GitHub Actions CI.
-- Connect the React review screen to a playlist confirmation endpoint.
 - Containerize and deploy the application with a production HTTPS redirect URI.
 
 ### Later
