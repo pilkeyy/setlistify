@@ -8,16 +8,27 @@ This walkthrough shows the React app searching for a Bad Bunny concert, reviewin
 
 ![Setlistify demo showing concert search, track review, and the playlist result with sample data](docs/setlistify-demo.gif)
 
-<details>
-<summary>Screenshots from a live run</summary>
+### Screenshots from a live run
 
-1. [Search for a concert](docs/screenshots/01-concert-search.png)
-2. [View the concert setlist](docs/screenshots/02-concert-setlist.png)
-3. [Review Spotify recordings](docs/screenshots/03-spotify-match-review.png)
-4. [See the playlist confirmation](docs/screenshots/04-playlist-confirmation.png)
-5. [See the 41-track result in Spotify (account details redacted)](docs/screenshots/05-spotify-playlist-redacted.png)
+**1. Search for a concert**
 
-</details>
+![Bad Bunny concert search results with dates and venues](docs/screenshots/01-concert-search.png)
+
+**2. View the concert setlist**
+
+![The selected concert's songs in setlist order](docs/screenshots/02-concert-setlist.png)
+
+**3. Review Spotify recordings**
+
+![Spotify track options and the Make playlist form](docs/screenshots/03-spotify-match-review.png)
+
+**4. See the playlist confirmation**
+
+![Setlistify confirms the playlist and shows a link to open it in Spotify](docs/screenshots/04-playlist-confirmation.png)
+
+**5. Open the 41-track playlist in Spotify**
+
+![The generated playlist open in Spotify, with the account name and profile picture covered](docs/screenshots/05-spotify-playlist-redacted.png)
 
 ## How It Works
 
