@@ -9,6 +9,7 @@ import com.setlistify.setlistify.model.dto.SetlistFmDTOs.SetsWrapper;
 import com.setlistify.setlistify.model.dto.SetlistFmDTOs.SongRecord;
 import com.setlistify.setlistify.services.SetlistService;
 import com.setlistify.setlistify.services.SpotifyPlaylistService;
+import com.setlistify.setlistify.services.SpotifyAuthService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -76,7 +77,7 @@ class PlaylistArtworkIntegrationTest {
         SpotifyClient client = new SpotifyClient(config, RestClient.builder(), apiBuilder);
         SetlistService setlists = mock(SetlistService.class);
         when(setlists.getTracksFromSetlist("concert")).thenReturn(List.of("Song"));
-        PlaylistController controller = new PlaylistController(new SpotifyPlaylistService(client, setlists));
+        PlaylistController controller = new PlaylistController(new SpotifyPlaylistService(client, setlists), new SpotifyAuthService(client));
         MockHttpSession session = new MockHttpSession();
         session.setAttribute("access_token", "test-token");
 
@@ -144,7 +145,7 @@ class PlaylistArtworkIntegrationTest {
         ));
         SpotifyOauthConfig config = new SpotifyOauthConfig("test-client", "http://127.0.0.1/callback", "");
         SpotifyClient client = new SpotifyClient(config, RestClient.builder(), apiBuilder);
-        PlaylistController controller = new PlaylistController(new SpotifyPlaylistService(client, new SetlistService(setlistFm)));
+        PlaylistController controller = new PlaylistController(new SpotifyPlaylistService(client, new SetlistService(setlistFm)), new SpotifyAuthService(client));
         MockHttpSession session = new MockHttpSession();
         session.setAttribute("access_token", "test-token");
 
@@ -204,7 +205,8 @@ class PlaylistArtworkIntegrationTest {
         ));
         SpotifyOauthConfig config = new SpotifyOauthConfig("test-client", "http://127.0.0.1/callback", "");
         SpotifyClient client = new SpotifyClient(config, RestClient.builder(), apiBuilder);
-        PlaylistController controller = new PlaylistController(new SpotifyPlaylistService(client, new SetlistService(setlistFm)));
+        PlaylistController controller = new PlaylistController(
+                new SpotifyPlaylistService(client, new SetlistService(setlistFm)), new SpotifyAuthService(client));
         MockHttpSession session = new MockHttpSession();
         session.setAttribute("access_token", "test-token");
 

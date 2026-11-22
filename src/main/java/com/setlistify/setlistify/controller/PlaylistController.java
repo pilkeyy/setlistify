@@ -6,7 +6,8 @@ import com.setlistify.setlistify.model.dto.PlaylistDTOs.PreviewRequest;
 import com.setlistify.setlistify.model.dto.PlaylistDTOs.PreviewResponse;
 import com.setlistify.setlistify.model.dto.PlaylistDTOs.ResultResponse;
 import com.setlistify.setlistify.services.SpotifyPlaylistService;
-import jakarta.servlet.http.HttpSession;
+import com.setlistify.setlistify.services.SpotifyAuthService;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -14,25 +15,26 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.bind.annotation.SessionAttribute;
 
 @RestController
 @RequestMapping("/api/v1")
 public class PlaylistController {
-    private final SpotifyPlaylistService
-            playlistService;
+    private final SpotifyPlaylistService playlistService;
+    private final SpotifyAuthService authService;
 
-    public PlaylistController(SpotifyPlaylistService playlistService) {
+    public PlaylistController(SpotifyPlaylistService playlistService, SpotifyAuthService authService) {
         this.playlistService = playlistService;
+        this.authService = authService;
     }
 
     @PostMapping("/playlist-previews")
     public ResponseEntity<?> previewPlaylist(
             @RequestBody PreviewRequest request,
-            @SessionAttribute(name = "access_token", required = false) String accessToken) {
+            HttpServletRequest servletRequest) {
         if (request == null || request.setlistId() == null || request.setlistId().isBlank()) {
             return ResponseEntity.badRequest().body(new ApiError(400, "Bad Request", "setlistId is required."));
         }
+        String accessToken = authService.getAccessToken(servletRequest.getSession(false));
         if (accessToken == null || accessToken.isBlank()) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(new ApiError(
                     401, "Unauthorized", "Sign in with Spotify before previewing a playlist."));
@@ -47,7 +49,7 @@ public class PlaylistController {
     }
 
     @PostMapping("/playlists/generate")
-    public ResponseEntity<?> generatePlaylist(@RequestBody CreateRequest request, HttpSession session) {
+    public ResponseEntity<?> generatePlaylist(@RequestBody CreateRequest request, HttpServletRequest servletRequest) {
         if (request == null || request.setlistId() == null || request.setlistId().isBlank()
                 || request.artistName() == null || request.artistName().isBlank()
                 || request.playlistName() == null || request.playlistName().isBlank()) {
@@ -56,7 +58,7 @@ public class PlaylistController {
             return ResponseEntity.badRequest().body(error);
         }
 
-        String accessToken = (String) session.getAttribute("access_token");
+        String accessToken = authService.getAccessToken(servletRequest.getSession(false));
         if (accessToken == null || accessToken.isBlank()) {
             ApiError error = new ApiError(401, "Unauthorized", "Sign in with Spotify before creating a playlist.");
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(error);

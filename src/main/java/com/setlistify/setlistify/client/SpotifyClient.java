@@ -46,6 +46,18 @@ public class SpotifyClient {
         body.add("client_id", oauthConfig.clientId());
         body.add("code_verifier", codeVerifier);
 
+        return requestTokens(body);
+    }
+
+    public TokenResponse refreshTokens(String refreshToken) {
+        MultiValueMap<String, String> body = new LinkedMultiValueMap<>();
+        body.add("grant_type", "refresh_token");
+        body.add("refresh_token", refreshToken);
+        body.add("client_id", oauthConfig.clientId());
+        return requestTokens(body);
+    }
+
+    private TokenResponse requestTokens(MultiValueMap<String, String> body) {
         return authRestClient.post()
                              .uri("/api/token")
                              .contentType(MediaType.APPLICATION_FORM_URLENCODED)

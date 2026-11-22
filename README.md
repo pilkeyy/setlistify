@@ -15,7 +15,7 @@ The API exposes these operations:
 - `POST /api/v1/playlist-previews` takes `{"setlistId":"…"}` and uses the signed-in Spotify session. It returns `200` with the concert artist and songs in setlist order. Each row has a one-based `songId` within that response, its title, a status (`MATCHED`, `NEEDS_REVIEW`, or `UNMATCHED`), a reason, and Spotify candidates with optional album artwork. The endpoint performs catalog reads only. It returns `422` if the source setlist has no songs or usable artist. The client holds the response for the current review.
 - `POST /api/v1/playlists/generate` takes a setlist ID, artist name, playlist name, and optional public/private choice. It classifies Spotify search results, creates a playlist only when at least one track is confirmed, and returns the playlist URL plus songs that were unmatched or need review. If no track is confirmed, it returns `422` without creating a playlist.
 
-The repository has no browser UI; a client must call these endpoints. Spotify login starts at `GET /api/v1/auth/login`.
+The React frontend supports artist search, concert selection, Spotify login, and draft track review. The playlist generation endpoint is available separately for API clients.
 
 ## Features
 
@@ -48,7 +48,7 @@ When `/api/v1/auth/login` is called, the server generates a random **code verifi
 
 After authorization, Spotify redirects to `/api/v1/auth/callback` with a code and state. The server checks the returned state against the value in the session, then exchanges the code and saved verifier at Spotify's token endpoint. The verifier proves possession of the secret corresponding to the earlier challenge. The access token is then stored in the session and used for playlist requests.
 
-The implementation stores the access token in the HTTP session, but does not refresh it or handle expiry, and it has no logout endpoint. The configured redirect URI is `http://127.0.0.1:8080/api/v1/auth/callback` for local development.
+The backend stores the tokens and expiry in the HTTP session. It refreshes expired access tokens before playlist requests when a refresh token is available. The frontend prompts the user to reconnect when the API returns `401`. The Spotify callback redirects to the frontend with a sign-in result. The browser does not receive the tokens.
 
 ## Engineering Decisions
 
@@ -86,19 +86,28 @@ Prerequisites: Java 21 and a Spotify developer application, plus a setlist.fm AP
    ./mvnw spring-boot:run
    ```
 
-The application uses Spring Boot's default local port, `8080`. Start the OAuth flow at `http://127.0.0.1:8080/api/v1/auth/login`; the other routes are JSON endpoints under `/api/v1`. Keep credentials out of source control. Although `.env` is ignored by Git, the application does not load it; set the variables in the process environment or use a separate environment loader.
+4. With Node.js installed, start the frontend in a second terminal:
+
+   ```sh
+   cd frontend
+   npm ci
+   npm run dev
+   ```
+
+5. Open `http://127.0.0.1:5173`, pick a concert, and use **Connect Spotify** and **Review Spotify matches**. Use `127.0.0.1` for both servers so they share the browser's session cookie. Vite proxies `/api` to Spring Boot on port `8080`. The callback returns to `http://127.0.0.1:5173` by default, controlled by the Spring property `app.frontend-url`.
+
+Keep credentials out of source control. Although `.env` is ignored by Git, the application does not load it; set the variables in the process environment or use a separate environment loader.
 
 ## Testing
 
-The test suite currently contains one Spring Boot context-load test. There are no dedicated tests for OAuth callback validation, external API clients, setlist parsing, track matching, or playlist generation.
+The backend has a Spring Boot context test and focused tests for playlist HTTP responses, API errors, Spotify client behavior, and preview ordering and artwork. The browser login and review flow has no automated coverage yet.
 
 ## Current Limitations
 
-- The project provides a REST API only; there is no user-facing web interface.
-- Spotify access tokens are stored in the HTTP session, but refresh-token and expired-session handling are not implemented.
-- The API reports candidate tracks needing review, but there is no browser UI yet for selecting among them.
+- Track review choices live in the current browser view. Saving those choices to a playlist is planned.
+- The app has no logout endpoint.
 - Spotify searches still run sequentially, so generation time increases with setlist length. Handling API rate limits and partial failures during batched playlist writes remains future work.
-- Production deployment and API-specific error handling are not implemented.
+- The project is configured for local development.
 
 ## Roadmap
 
@@ -109,7 +118,7 @@ Planned work, not implemented yet:
 - Expand automated unit and integration testing.
 - Configure outbound HTTP timeouts and handle Spotify `429` responses using `Retry-After` before considering concurrent track lookups.
 - Add GitHub Actions CI.
-- Build a React frontend.
+- Connect the React review screen to a playlist confirmation endpoint.
 - Containerize and deploy the application with a production HTTPS redirect URI.
 
 ### Later

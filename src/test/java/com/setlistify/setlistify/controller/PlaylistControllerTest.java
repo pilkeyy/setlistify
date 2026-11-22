@@ -1,11 +1,14 @@
 package com.setlistify.setlistify.controller;
 
+import com.setlistify.setlistify.client.SpotifyClient;
 import com.setlistify.setlistify.model.dto.PlaylistDTOs.CreateRequest;
 import com.setlistify.setlistify.model.dto.PlaylistDTOs.ResultResponse;
 import com.setlistify.setlistify.services.SpotifyPlaylistService;
+import com.setlistify.setlistify.services.SpotifyAuthService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockHttpSession;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -20,12 +23,16 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @WebMvcTest(PlaylistController.class)
+@Import(SpotifyAuthService.class)
 class PlaylistControllerTest {
     @Autowired
     private MockMvc mockMvc;
 
     @MockitoBean
     private SpotifyPlaylistService playlistService;
+
+    @MockitoBean
+    private SpotifyClient spotifyClient;
 
     @Test
     void previewRequiresSpotifySession() throws Exception {
