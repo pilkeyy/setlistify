@@ -1,7 +1,10 @@
 package com.setlistify.setlistify.controller;
 
 import com.setlistify.setlistify.client.SpotifyClient;
+import com.setlistify.setlistify.exception.PreviewSupersededException;
 import com.setlistify.setlistify.model.dto.PlaylistDTOs.CreateRequest;
+import com.setlistify.setlistify.model.dto.PlaylistDTOs.PreviewResponse;
+import com.setlistify.setlistify.model.dto.SpotifyDTOs.TokenResponse;
 import com.setlistify.setlistify.model.dto.PlaylistDTOs.ResultResponse;
 import com.setlistify.setlistify.services.SpotifyPlaylistService;
 import com.setlistify.setlistify.services.SpotifyAuthService;
@@ -15,12 +18,18 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import com.jayway.jsonpath.JsonPath;
 
 @WebMvcTest(PlaylistController.class)
 @Import(SpotifyAuthService.class)
@@ -33,6 +42,9 @@ class PlaylistControllerTest {
 
     @MockitoBean
     private SpotifyClient spotifyClient;
+
+    @Autowired
+    private SpotifyAuthService authService;
 
     @Test
     void previewRequiresSpotifySession() throws Exception {
@@ -149,6 +161,75 @@ class PlaylistControllerTest {
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.playlistCreated").value(true))
                 .andExpect(jsonPath("$.playlistId").value("playlist-123"));
+    }
+
+    @Test
+    void slowerOlderPreviewDoesNotReplaceNewerReview() throws Exception {
+        MockHttpSession session = authenticatedSession();
+        String[] newerReviewId = new String[1];
+        when(playlistService.previewPlaylist(eq("concert-b"), anyString(), any()))
+                .thenReturn(new PreviewResponse("concert-b", "Band B", List.of()));
+        // Concert A's preview is still matching when the user starts concert B, and A finishes last.
+        when(playlistService.previewPlaylist(eq("concert-a"), anyString(), any())).thenAnswer(invocation -> {
+            String newer = mockMvc.perform(post("/api/v1/playlist-previews").session(session)
+                            .contentType(MediaType.APPLICATION_JSON).content("{\"setlistId\":\"concert-b\"}"))
+                    .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+            newerReviewId[0] = JsonPath.read(newer, "$.reviewId");
+            return new PreviewResponse("concert-a", "Band A", List.of());
+        });
+
+        mockMvc.perform(post("/api/v1/playlist-previews").session(session)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"setlistId\":\"concert-a\"}"))
+                .andExpect(status().isConflict());
+
+        assertEquals(newerReviewId[0], activeReviewId(session));
+    }
+
+    @Test
+    void olderPreviewPausedInTokenRefreshDoesNotReplaceNewerReview() throws Exception {
+        MockHttpSession session = new MockHttpSession();
+        when(spotifyClient.fetchTokens("code", "verifier"))
+                .thenReturn(new TokenResponse("expiring", "Bearer", 1, "refresh", ""));
+        authService.exchangeCodeForTokens("code", "verifier", session);
+        Thread.sleep(1_100);
+        when(playlistService.previewPlaylist(anyString(), anyString(), any())).thenAnswer(invocation ->
+                new PreviewResponse(invocation.getArgument(0), "Band", List.of()));
+        String[] newerReviewId = new String[1];
+        AtomicInteger refreshes = new AtomicInteger();
+        when(spotifyClient.refreshTokens("refresh")).thenAnswer(invocation -> {
+            if (refreshes.incrementAndGet() == 1) {
+                // The older preview is paused in its token refresh while the newer one runs to completion.
+                String newer = mockMvc.perform(post("/api/v1/playlist-previews").session(session)
+                                .contentType(MediaType.APPLICATION_JSON).content("{\"setlistId\":\"concert-b\"}"))
+                        .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+                newerReviewId[0] = JsonPath.read(newer, "$.reviewId");
+            }
+            return new TokenResponse("fresh", "Bearer", 3600, "refresh", "");
+        });
+
+        mockMvc.perform(post("/api/v1/playlist-previews").session(session)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"setlistId\":\"concert-a\"}"))
+                .andExpect(status().isConflict());
+
+        assertEquals(newerReviewId[0], activeReviewId(session));
+    }
+
+    @Test
+    void supersededPreviewReturnsConflict() throws Exception {
+        when(playlistService.previewPlaylist(anyString(), anyString(), any()))
+                .thenThrow(new PreviewSupersededException());
+
+        mockMvc.perform(post("/api/v1/playlist-previews").session(authenticatedSession())
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"setlistId\":\"concert\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value("A newer review was started. Use that review instead."));
+    }
+
+    private static Object activeReviewId(MockHttpSession session) throws Exception {
+        Object review = session.getAttribute("playlist_review");
+        var id = review.getClass().getDeclaredMethod("id");
+        id.setAccessible(true);
+        return id.invoke(review);
     }
 
     private static MockHttpSession authenticatedSession() {

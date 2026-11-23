@@ -27,7 +27,9 @@ public class SpotifyClient {
     private final RestClient apiRestClient;
     @Autowired
     public SpotifyClient(SpotifyOauthConfig oauthConfig) {
-        this(oauthConfig, RestClient.builder(), RestClient.builder());
+        this(oauthConfig,
+                RestClient.builder().requestFactory(UpstreamHttp.requestFactory()),
+                RestClient.builder().requestFactory(UpstreamHttp.requestFactory()));
     }
 
     SpotifyClient(SpotifyOauthConfig oauthConfig,

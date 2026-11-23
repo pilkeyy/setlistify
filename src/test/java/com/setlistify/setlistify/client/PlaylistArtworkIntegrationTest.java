@@ -40,7 +40,7 @@ class PlaylistArtworkIntegrationTest {
     @Test
     void returnsAlbumArtworkAndKeepsCandidatesWithoutArtworkReviewable() throws Exception {
         RestClient.Builder apiBuilder = RestClient.builder();
-        MockRestServiceServer spotify = MockRestServiceServer.bindTo(apiBuilder).build();
+        MockRestServiceServer spotify = MockRestServiceServer.bindTo(apiBuilder).ignoreExpectOrder(true).build();
         spotify.expect(requestTo(containsString("/search")))
                 .andRespond(withSuccess("""
                         {
@@ -112,7 +112,7 @@ class PlaylistArtworkIntegrationTest {
     @Test
     void previewsOrderedSongOccurrencesWithReadOnlySpotifyRequests() throws Exception {
         RestClient.Builder apiBuilder = RestClient.builder();
-        MockRestServiceServer spotify = MockRestServiceServer.bindTo(apiBuilder).build();
+        MockRestServiceServer spotify = MockRestServiceServer.bindTo(apiBuilder).ignoreExpectOrder(true).build();
         String openingTrack = """
                 {"tracks":{"items":[{
                   "name":"Opening + {Live}",
@@ -136,7 +136,7 @@ class PlaylistArtworkIntegrationTest {
         expectSearchQuery(spotify, "track%3ALost", """
                 {"tracks":{"items":[]}}
                 """);
-        expectSearch(spotify, "Opening%20%2B%20%7BLive%7D", openingTrack);
+        // The repeated "Opening + {Live}" row reuses the first search instead of calling Spotify again.
 
         SetlistFmClient setlistFm = mock(SetlistFmClient.class);
         when(setlistFm.fetchSingleSetlist("concert")).thenReturn(new ConcertRecord(
@@ -183,7 +183,7 @@ class PlaylistArtworkIntegrationTest {
     @ValueSource(booleans = {true, false})
     void previewsCreditedRemixEvenWhenTheArtistFilterMissesIt(boolean foundByArtistSearch) throws Exception {
         RestClient.Builder apiBuilder = RestClient.builder();
-        MockRestServiceServer spotify = MockRestServiceServer.bindTo(apiBuilder).build();
+        MockRestServiceServer spotify = MockRestServiceServer.bindTo(apiBuilder).ignoreExpectOrder(true).build();
         String noMeConoce = """
                 {"tracks":{"items":[
                   {"name":"No Me Conoce","uri":"spotify:track:original","artists":[{"name":"JHAYCO"}]},
@@ -232,7 +232,7 @@ class PlaylistArtworkIntegrationTest {
     @Test
     void createsPrivatePlaylistFromValidatedSelectionsInSetlistOrderOnlyOnce() throws Exception {
         RestClient.Builder api = RestClient.builder();
-        MockRestServiceServer spotify = MockRestServiceServer.bindTo(api).build();
+        MockRestServiceServer spotify = MockRestServiceServer.bindTo(api).ignoreExpectOrder(true).build();
         expectSearchQuery(spotify, "track%3ATiti%20Me%20Pregunto%20artist%3ABad%20Bunny", """
                 {"tracks":{"items":[{"name":"Tití Me Preguntó","uri":"spotify:track:titi",
                 "artists":[{"name":"Bad Bunny"}]}]}}

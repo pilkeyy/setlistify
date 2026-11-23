@@ -13,7 +13,9 @@ public class SetlistFmClient {
 
     public SetlistFmClient(@Value("${SETLIST_FM_KEY}") String apiKey) {
         this.apiKey = apiKey;
-        restClient = RestClient.builder().baseUrl("https://api.setlist.fm/rest/1.0").build();
+        restClient = RestClient.builder()
+                               .requestFactory(UpstreamHttp.requestFactory())
+                               .baseUrl("https://api.setlist.fm/rest/1.0").build();
     }
 
     public ConcertRecord fetchSingleSetlist(String setlistId) {
