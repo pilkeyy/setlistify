@@ -1,5 +1,7 @@
 # Setlistify
 
+[![CI](https://github.com/pilkeyy/setlistify/actions/workflows/ci.yml/badge.svg)](https://github.com/pilkeyy/setlistify/actions/workflows/ci.yml)
+
 Setlistify turns concert setlists into Spotify playlists. Its Spring Boot backend integrates setlist.fm and Spotify, using OAuth 2.0 with PKCE to authorize playlist creation from live-performance tracklists.
 
 ## Demo
@@ -40,7 +42,7 @@ The API exposes these operations:
 
 - `GET /api/v1/setlists/search?artist={name}` returns concert summaries from setlist.fm.
 - `GET /api/v1/setlists/{setlistId}/tracks` returns song names from a setlist.
-- `POST /api/v1/playlist-previews` takes `{"setlistId":"…"}` and returns `200` with a review ID, the concert artist, and songs in setlist order. Each row has a one-based `songId`, title, match status, reason, and up to three candidates, each with at most one artwork image sized for display. The server keeps the allowed candidate URIs for one active review in the Spotify session. The review ID is valid for 30 minutes. Preview only reads from Spotify. Each distinct title is searched once, with at most three searches in flight across the app, and search results are cached for an hour so re-matching a concert makes no new Spotify calls; matching that exceeds 15 seconds returns `504`, and after a Spotify `429` new searches fail fast, and any preview failure during that cooldown returns `503` with `Retry-After`.
+- `POST /api/v1/playlist-previews` takes `{"setlistId":"…"}` and returns `200` with a review ID, the concert artist, and songs in setlist order. Each row has a one-based `songId`, title, match status, reason, and up to three candidates, each with at most one artwork image sized for display. The server keeps the allowed candidate URIs for one active review in the Spotify session; the review ID is valid for 30 minutes. Preview only reads from Spotify. Errors: `409` if a newer preview replaced this one, `504` if matching exceeds 15 seconds, `503` with `Retry-After` while Spotify is rate limiting (see [Performance and Rate Limits](#performance-and-rate-limits)).
 - `POST /api/v1/playlists` takes `reviewId`, `playlistName`, and `selections` containing `{songId, trackUri}` pairs. It validates the selected candidate for each song, skips omitted rows, and creates a private Spotify playlist in concert order. It returns `201` with the playlist link when Spotify confirms all writes. If adding tracks fails after creation, the error response includes a link to the playlist so the user can inspect it.
 - `POST /api/v1/playlists/generate` takes a setlist ID, artist name, playlist name, and optional public/private choice. It classifies Spotify search results, creates a playlist only when at least one track is confirmed, and returns the playlist URL plus songs that were unmatched or need review. If no track is confirmed, it returns `422` without creating a playlist.
 
@@ -48,13 +50,12 @@ In React, users search for an artist, choose a concert, sign in to Spotify, revi
 
 ## Features
 
-- Spotify sign-in using OAuth 2.0 Authorization Code with PKCE.
-- Artist-based setlist search through setlist.fm.
-- Retrieval of songs from a selected setlist.
-- Spotify track search using track and artist query terms.
-- Creation of a public or private Spotify playlist and addition of matched tracks.
-- A generation response containing the playlist URL, match counts, and unmatched setlist songs.
-- Track additions are sent in batches of up to 100 URIs.
+- Spotify sign-in using OAuth 2.0 Authorization Code with PKCE, with server-side token refresh.
+- Artist-based concert search and setlist retrieval through setlist.fm.
+- Track matching that auto-selects only an unambiguous match (exact normalized title plus a credited artist) and sends multiple recordings, title variants (such as “(feat. …)” or “- Remix”), and artist mismatches to review.
+- A review step where the user keeps, changes, or skips each song before anything is written to Spotify.
+- Private playlist creation in concert order, with tracks added in batches of up to 100 URIs.
+- Parallel, rate-limit-aware matching with caching (see [Performance and Rate Limits](#performance-and-rate-limits)).
 
 ## Architecture
 
@@ -86,13 +87,37 @@ The backend stores the tokens and expiry in the HTTP session. It refreshes expir
 - The PKCE verifier and OAuth state live in the HTTP session across the redirect. The access token is kept there for subsequent requests, so authentication depends on session continuity; the application is not stateless.
 - Track searches start with `track:{song} artist:{artist}` and request five results. A single exact normalized title match with the artist anywhere in the track credits is eligible for automatic selection. A credited track with a matching base title and a recognized version suffix, such as “(Bonus)” or “- Remix,” is offered for review. If neither is found, the matcher tries one title-only search before reporting an artist mismatch or an unmatched song. Multiple exact title-and-artist recordings also go to review.
 - Playlist creation happens after matching. If there are no confirmed tracks, no Spotify playlist is created; Spotify search or playlist-write errors are still upstream failures rather than unmatched songs.
-- Spotify searches run sequentially, with up to two requests per song. Playlist generation time grows with the number of songs and Spotify's response times; parallel lookups would need to account for API rate limits.
+- Preview and confirm are separate requests. The server stores the candidate URIs it offered and accepts only those on confirm, rebuilding concert order from its own rows; it consumes the review before writing so a repeated submission cannot create a second playlist.
+- Each preview registers itself as the session's latest before any blocking work (token refresh, matching). Only the latest may save its review, and a replaced preview stops its queued Spotify searches.
+- Spotify searches run concurrently on Java 21 virtual threads behind one app-wide `Semaphore`, because Spotify rate-limits the whole app rather than each user. Results are consumed as they finish and reassembled in setlist order.
 - The service adds Spotify URIs through `POST /playlists/{playlist_id}/items`, in batches of at most 100.
+
+## Performance and Rate Limits
+
+Matching was the slow step: originally one blocking Spotify search per song, one after another, after fetching the setlist from setlist.fm a second time. Measured from the per-preview timing log on real setlists:
+
+| Version | 38 songs | 50 songs |
+| --- | --- | --- |
+| Sequential searches (sum of search times) | 9.95 s | 14.1 s |
+| Parallel, 6 searches in flight | 1.76 s | 2.70 s |
+| Parallel, 3 searches in flight, first match | TODO(numbers) | TODO(numbers) |
+| Repeat match of the same concert (cached) | TODO(numbers) | TODO(numbers) |
+
+How it stays within limits:
+
+- **Fewer calls first.** The setlist is cached (15 minutes) with one shared in-flight fetch per setlist, each distinct title is searched once per preview, and search results are cached for an hour.
+- **Bounded concurrency.** At most three searches are in flight across the app. Six was faster, but bursts of about 20 requests per second earned a two-hour `429` from Spotify in development mode.
+- **Timeouts and a deadline.** 3-second connect and 5-second read timeouts on every outbound call, and a 15-second limit for a whole preview.
+- **Cooldown.** After a Spotify `429`, the app stops searching until `Retry-After` passes and returns `503` with `Retry-After`, so the UI waits instead of retrying. Cached concerts still preview during a cooldown.
+- **Error precedence.** An authorization failure (`401`/`403`) wins over an active cooldown, so the reconnect prompt is never hidden.
 
 ## Tech Stack
 
-- Java 21
+- Java 21 (virtual threads)
 - Spring Boot 4.1.0 and Spring Web MVC (`RestClient` for outbound HTTP)
+- React 19 and Vite
+- JUnit 5, Mockito, MockMvc, and `MockRestServiceServer`
+- GitHub Actions CI
 - Maven and Maven Wrapper
 - Spotify Accounts service and Spotify Web API
 - setlist.fm REST API
@@ -129,13 +154,24 @@ Keep credentials out of source control. Although `.env` is ignored by Git, the a
 
 ## Testing
 
-The backend has a Spring Boot context test and focused tests for playlist HTTP responses, API errors, Spotify client behavior, and preview ordering and artwork. The browser login and review flow has no automated coverage yet.
+GitHub Actions runs `./mvnw -B verify` and the frontend production build on every pull request and every push to `main`. Tests use mocks and never call Spotify or setlist.fm, so CI needs only placeholder API keys.
+
+The backend suite covers the matching rules (normalization, title variants, review outcomes), HTTP responses and error mapping, the preview/confirm flow and its allowlist, and the concurrency behavior: setlist order with bounded searches, rate-limit cooldowns with and without `Retry-After`, deadlines, overlapping previews and the token-refresh race, caching, and single-flight setlist fetches. Run it locally with:
+
+```sh
+SETLIST_FM_KEY=test SPOTIFY_CLIENT_ID=test ./mvnw test
+```
+
+The browser login and review flow has no automated coverage yet.
 
 ## Current Limitations
 
-- Each Spotify session has one active review. A new preview replaces it, and a valid creation attempt consumes it. An interrupted or partial Spotify write has no automatic retry.
+- **Spotify development mode.** Spotify limits development-mode apps to a small allowlist of users (five as of 2026), and extended access is aimed at established organizations. Setlistify deliberately stays a personal project in development mode; see the roadmap for how it would scale.
+- **setlist.fm quota.** One API key serves every user, with a per-second and a daily request limit. Artist searches are not cached yet.
+- **Single instance.** Sessions, caches, and the rate-limit cooldown live in memory. Restarting clears them, and a second instance would not share them.
+- **Shared search cache.** Cached Spotify results are shared across users, although Spotify results can depend on the user's market.
+- Each Spotify session has one active review. An interrupted or partial Spotify write has no automatic retry.
 - The app has no logout endpoint.
-- Spotify searches run sequentially, so preview time increases with setlist length.
 - The project is configured for local development.
 
 ## Roadmap
@@ -144,18 +180,22 @@ Planned work, not implemented yet:
 
 ### Near Term
 
-- Expand automated unit and integration testing.
-- Configure outbound HTTP timeouts and handle Spotify `429` responses using `Retry-After` before considering concurrent track lookups.
-- Add GitHub Actions CI.
-- Containerize and deploy the application with a production HTTPS redirect URI.
+- Cache setlist.fm artist searches and space setlist.fm calls to stay within its per-second limit.
+- Add frontend tests for the review flow.
+- Add Dependabot updates for GitHub Actions, Maven, and npm.
+- Retire the legacy `POST /api/v1/playlists/generate` endpoint after confirming it has no consumers.
+
+### Scaling beyond development mode
+
+- Search with an app-level token (client credentials) and create playlists in a shared Setlistify account, or export a track list, so users do not need to be allowlisted.
+- Move sessions, caches, and the rate-limit cooldown to Redis so several instances share them, and replace the per-instance semaphore with a shared rate limiter.
+- Request a higher setlist.fm quota.
 
 ### Later
 
-- Benchmark repeated setlist retrieval and evaluate Redis caching, subject to API terms.
 - Explore screenshot or image input for track extraction.
-- Improve Spotify track matching beyond first-result selection.
 - Add persistent user and social features if the product expands in that direction.
 
 ## Engineering Highlights
 
-Setlistify demonstrates third-party API integration, OAuth 2.0 with PKCE, session-backed authentication, typed Java records for nested JSON responses, layered Spring architecture, and orchestration of multi-step workflows across external services.
+Setlistify demonstrates third-party API integration with OAuth 2.0 and PKCE, evidence-based track matching with a human review step, a preview/confirm API that never trusts client-supplied track choices, bounded concurrency on Java 21 virtual threads, rate-limit and timeout handling for external services, measured performance work, and a test suite (run in CI) that covers race conditions as well as business rules.
