@@ -57,16 +57,18 @@ public class PlaylistController {
             return reviewError(HttpStatus.UNAUTHORIZED, "Sign in with Spotify before previewing a playlist.");
         }
         String sessionId = session.getId();
+        // Register this preview as the latest before anything that can block (token refresh, matching),
+        // so an older request that resumes later can't claim to be newer.
+        String reviewId = UUID.randomUUID().toString();
+        synchronized (WebUtils.getSessionMutex(session)) {
+            session.setAttribute(PENDING_REVIEW, reviewId);
+        }
         String accessToken = authService.getAccessToken(session);
         if (accessToken == null || accessToken.isBlank()) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(new ApiError(
                     401, "Unauthorized", "Sign in with Spotify before previewing a playlist."));
         }
 
-        String reviewId = UUID.randomUUID().toString();
-        synchronized (WebUtils.getSessionMutex(session)) {
-            session.setAttribute(PENDING_REVIEW, reviewId);
-        }
         PreviewResponse preview = playlistService.previewPlaylist(request.setlistId(), accessToken);
         if (preview == null) {
             return ResponseEntity.unprocessableEntity().body(new ApiError(

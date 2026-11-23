@@ -2,7 +2,12 @@ package com.setlistify.setlistify.services;
 
 import com.setlistify.setlistify.client.SpotifyClient;
 import com.setlistify.setlistify.exception.SpotifyRateLimitedException;
+import com.setlistify.setlistify.model.dto.PlaylistDTOs.CreateRequest;
+import com.setlistify.setlistify.model.dto.PlaylistDTOs.ResultResponse;
 import com.setlistify.setlistify.model.dto.PlaylistDTOs.SongReview;
+import com.setlistify.setlistify.model.dto.PlaylistDTOs.TrackCandidate;
+import com.setlistify.setlistify.model.dto.SpotifyDTOs.SearchResponse.AlbumItem;
+import com.setlistify.setlistify.model.dto.SpotifyDTOs.SearchResponse.ImageItem;
 import com.setlistify.setlistify.model.dto.SpotifyDTOs.SearchResponse;
 import com.setlistify.setlistify.model.dto.SpotifyDTOs.SearchResponse.ArtistItem;
 import com.setlistify.setlistify.model.dto.SpotifyDTOs.SearchResponse.TrackItem;
@@ -12,6 +17,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.ResourceAccessException;
+
+import java.time.Duration;
 
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -21,6 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
@@ -72,6 +81,71 @@ class SpotifyMatchConcurrencyTest {
                 () -> service.previewPlaylist("concert", "token"));
         assertTrue(cooldown.retryAfterSeconds() > 0 && cooldown.retryAfterSeconds() <= 30);
         verify(spotify, times(1)).searchTrack(eq("token"), anyString());
+    }
+
+    @Test
+    void reportsLaterSongsRateLimitInsteadOfEarlierSongsSlowFailure() {
+        when(setlists.getSetlistTracks("concert")).thenReturn(new SetlistTracks("Band", List.of("Slow", "Limited")));
+        when(spotify.searchTrack(eq("token"), contains("Slow"))).thenAnswer(invocation -> {
+            Thread.sleep(300);
+            throw new ResourceAccessException("Read timed out");
+        });
+        when(spotify.searchTrack(eq("token"), contains("Limited"))).thenThrow(tooManyRequests("30"));
+
+        HttpClientErrorException thrown = assertThrows(HttpClientErrorException.class,
+                () -> service.previewPlaylist("concert", "token"));
+
+        assertEquals("30", thrown.getResponseHeaders().getFirst(HttpHeaders.RETRY_AFTER));
+    }
+
+    @Test
+    void reportsActiveCooldownWhenTheDeadlinePasses() {
+        SpotifyPlaylistService shortDeadline = new SpotifyPlaylistService(spotify, setlists, Duration.ofMillis(200));
+        when(setlists.getSetlistTracks("slow")).thenReturn(new SetlistTracks("Band", List.of("Slow")));
+        when(setlists.getSetlistTracks("limited")).thenReturn(new SetlistTracks("Band", List.of("Limited")));
+        when(spotify.searchTrack(eq("token"), contains("Limited"))).thenThrow(tooManyRequests("30"));
+        when(spotify.searchTrack(eq("token"), contains("Slow"))).thenAnswer(invocation -> {
+            // Another preview is rate limited while this search is still in flight.
+            assertThrows(HttpClientErrorException.class, () -> shortDeadline.previewPlaylist("limited", "token"));
+            Thread.sleep(1_000);
+            return found("Slow");
+        });
+
+        SpotifyRateLimitedException thrown = assertThrows(SpotifyRateLimitedException.class,
+                () -> shortDeadline.previewPlaylist("slow", "token"));
+
+        assertTrue(thrown.retryAfterSeconds() > 0 && thrown.retryAfterSeconds() <= 30);
+    }
+
+    @Test
+    void capsCandidatesAndArtworkOnlyInThePreview() {
+        when(setlists.getSetlistTracks("concert")).thenReturn(new SetlistTracks("Band", List.of("Song")));
+        when(setlists.getTracksFromSetlist("concert")).thenReturn(List.of("Song"));
+        AlbumItem album = new AlbumItem("Album", List.of(new ImageItem("https://i.scdn.co/640", 640, 640),
+                new ImageItem("https://i.scdn.co/300", 300, 300), new ImageItem("https://i.scdn.co/64", 64, 64)), null);
+        List<TrackItem> recordings = IntStream.rangeClosed(1, 5)
+                .mapToObj(i -> new TrackItem("id" + i, "Song", "spotify:track:" + i,
+                        List.of(new ArtistItem("Band")), album, null))
+                .toList();
+        when(spotify.searchTrack(eq("token"), anyString()))
+                .thenReturn(new SearchResponse(new TracksWrapper(recordings)));
+
+        SongReview previewRow = service.previewPlaylist("concert", "token").songs().getFirst();
+        ResultResponse generated = service.generatePlaylistFromSetlist(
+                new CreateRequest("concert", "Band", "Playlist", false), "token");
+
+        assertEquals(SpotifyPlaylistService.MAX_CANDIDATES_PER_SONG, previewRow.candidates().size());
+        assertEquals(List.of("https://i.scdn.co/300"),
+                previewRow.candidates().getFirst().album().images().stream().map(image -> image.url()).toList());
+        TrackCandidate generatedFirst = generated.needsReviewSongs().getFirst().candidates().getFirst();
+        assertEquals(5, generated.needsReviewSongs().getFirst().candidates().size());
+        assertEquals(3, generatedFirst.album().images().size());
+    }
+
+    private static HttpClientErrorException tooManyRequests(String retryAfter) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.set(HttpHeaders.RETRY_AFTER, retryAfter);
+        return HttpClientErrorException.create(HttpStatus.TOO_MANY_REQUESTS, "Too Many Requests", headers, new byte[0], null);
     }
 
     private static SearchResponse found(String title) {

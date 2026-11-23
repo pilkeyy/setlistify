@@ -26,6 +26,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestClientResponseException;
@@ -41,13 +42,14 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.CompletionService;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorCompletionService;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Pattern;
@@ -59,7 +61,7 @@ public class SpotifyPlaylistService {
     static final int MAX_CONCURRENT_SEARCHES = 6;
     /** Candidates offered per song; the confirm step only accepts URIs from this list. */
     static final int MAX_CANDIDATES_PER_SONG = 3;
-    private static final Duration MATCH_DEADLINE = Duration.ofSeconds(15);
+    private static final Duration DEFAULT_MATCH_DEADLINE = Duration.ofSeconds(15);
     private static final Duration DEFAULT_RATE_LIMIT_COOLDOWN = Duration.ofSeconds(5);
     /** Artwork renders at 48px, so the smallest image covering 2x density is enough. */
     private static final int MIN_ARTWORK_PIXELS = 96;
@@ -74,10 +76,17 @@ public class SpotifyPlaylistService {
     private final SetlistService setlistService;
     private final Semaphore searchPermits = new Semaphore(MAX_CONCURRENT_SEARCHES);
     private final AtomicLong rateLimitedUntilMillis = new AtomicLong();
+    private final Duration matchDeadline;
 
+    @Autowired
     public SpotifyPlaylistService(SpotifyClient spotifyClient, SetlistService setlistService) {
+        this(spotifyClient, setlistService, DEFAULT_MATCH_DEADLINE);
+    }
+
+    SpotifyPlaylistService(SpotifyClient spotifyClient, SetlistService setlistService, Duration matchDeadline) {
         this.spotifyClient = spotifyClient;
         this.setlistService = setlistService;
+        this.matchDeadline = matchDeadline;
     }
 
     public PreviewResponse previewPlaylist(String setlistId, String accessToken) {
@@ -89,8 +98,9 @@ public class SpotifyPlaylistService {
         }
         MatchStats stats = new MatchStats();
         try {
+            List<SongReview> songs = matchSongs(setlist.songs(), setlist.artistName(), accessToken, stats);
             return new PreviewResponse(setlistId, setlist.artistName(),
-                    matchSongs(setlist.songs(), setlist.artistName(), accessToken, stats));
+                    songs.stream().map(SpotifyPlaylistService::forPreview).toList());
         } finally {
             logTimings("preview", setlist.songs().size(), setlistNanos, stats, System.nanoTime() - started);
         }
@@ -179,36 +189,39 @@ public class SpotifyPlaylistService {
 
     /**
      * Classifies every song in setlist order. Each distinct title is searched once, concurrently with the
-     * others, and repeated titles reuse that result under their own song ID.
+     * others, and repeated titles reuse that result under their own song ID. Results are consumed as workers
+     * finish, so the first failure (such as a 429) surfaces even while earlier songs are still in flight.
      */
     private List<SongReview> matchSongs(List<String> songs, String artistName, String accessToken,
                                         MatchStats stats) {
-        long deadline = System.nanoTime() + MATCH_DEADLINE.toNanos();
+        long deadline = System.nanoTime() + matchDeadline.toNanos();
         String normalizedArtist = normalize(artistName);
         ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
         try {
-            Map<String, Future<SongReview>> byTitle = new HashMap<>();
-            List<Future<SongReview>> rows = new ArrayList<>(songs.size());
+            CompletionService<SongReview> completions = new ExecutorCompletionService<>(executor);
+            Set<String> titles = new HashSet<>();
             for (String song : songs) {
-                if (normalize(song).isEmpty()) {
-                    rows.add(null);
-                    continue;
+                if (!normalize(song).isEmpty() && titles.add(song)) {
+                    completions.submit(() -> classifySong(song, normalizedArtist, artistName, accessToken, stats));
                 }
-                rows.add(byTitle.computeIfAbsent(song, title -> executor.submit(
-                        () -> classifySong(title, normalizedArtist, artistName, accessToken, stats))));
             }
-            stats.distinctTitles = byTitle.size();
+            stats.distinctTitles = titles.size();
+
+            Map<String, SongReview> byTitle = new HashMap<>();
+            for (int remaining = titles.size(); remaining > 0; remaining--) {
+                SongReview review = nextCompleted(completions, deadline);
+                byTitle.put(review.title(), review);
+            }
 
             List<SongReview> reviews = new ArrayList<>(songs.size());
             for (int i = 0; i < songs.size(); i++) {
                 int songId = i + 1;
-                Future<SongReview> row = rows.get(i);
-                if (row == null) {
+                SongReview review = byTitle.get(songs.get(i));
+                if (review == null) {
                     reviews.add(new SongReview(songId, songs.get(i), MatchStatus.UNMATCHED,
                             MatchReason.MISSING_TITLE, List.of()));
                     continue;
                 }
-                SongReview review = await(row, deadline);
                 reviews.add(new SongReview(songId, review.title(), review.status(), review.reason(),
                         review.candidates()));
             }
@@ -219,15 +232,23 @@ public class SpotifyPlaylistService {
         }
     }
 
-    private static SongReview await(Future<SongReview> row, long deadlineNanos) {
+    private SongReview nextCompleted(CompletionService<SongReview> completions, long deadlineNanos) {
+        Future<SongReview> done;
         try {
-            return row.get(Math.max(0, deadlineNanos - System.nanoTime()), TimeUnit.NANOSECONDS);
-        } catch (TimeoutException exception) {
-            throw new SpotifyMatchTimeoutException();
+            done = completions.poll(Math.max(0, deadlineNanos - System.nanoTime()), TimeUnit.NANOSECONDS);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while matching songs", exception);
+        }
+        if (done == null) {
+            throw preferCooldown(new SpotifyMatchTimeoutException());
+        }
+        try {
+            return done.get();
         } catch (ExecutionException exception) {
             // Rethrow the worker's own exception so ApiExceptionHandler maps it as before.
             if (exception.getCause() instanceof RuntimeException cause) {
-                throw cause;
+                throw preferCooldown(cause);
             }
             if (exception.getCause() instanceof Error error) {
                 throw error;
@@ -237,6 +258,26 @@ public class SpotifyPlaylistService {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Interrupted while matching songs", exception);
         }
+    }
+
+    /**
+     * While a Spotify cooldown is active, report it instead of an unrelated failure, so the client always
+     * receives Retry-After. An original 429 already carries Retry-After and is returned unchanged.
+     */
+    private RuntimeException preferCooldown(RuntimeException failure) {
+        if (failure instanceof RestClientResponseException response
+                && response.getStatusCode().value() == HttpStatus.TOO_MANY_REQUESTS.value()) {
+            return failure;
+        }
+        long remainingMillis = rateLimitedUntilMillis.get() - System.currentTimeMillis();
+        if (remainingMillis > 0) {
+            return new SpotifyRateLimitedException(cooldownSeconds(remainingMillis));
+        }
+        return failure;
+    }
+
+    private static long cooldownSeconds(long remainingMillis) {
+        return Math.max(1, TimeUnit.MILLISECONDS.toSeconds(remainingMillis + 999));
     }
 
     /** Returns the classification for one non-blank title; the caller assigns the song ID. */
@@ -290,7 +331,7 @@ public class SpotifyPlaylistService {
     private void failFastDuringCooldown() {
         long remainingMillis = rateLimitedUntilMillis.get() - System.currentTimeMillis();
         if (remainingMillis > 0) {
-            throw new SpotifyRateLimitedException(Math.max(1, TimeUnit.MILLISECONDS.toSeconds(remainingMillis + 999)));
+            throw new SpotifyRateLimitedException(cooldownSeconds(remainingMillis));
         }
     }
 
@@ -355,7 +396,7 @@ public class SpotifyPlaylistService {
 
     private static SongReview needsReview(int songId, String song, MatchReason reason, List<TrackItem> candidates) {
         return new SongReview(songId, song, MatchStatus.NEEDS_REVIEW, reason,
-                candidates.stream().limit(MAX_CANDIDATES_PER_SONG).map(SpotifyPlaylistService::toCandidate).toList());
+                candidates.stream().map(SpotifyPlaylistService::toCandidate).toList());
     }
 
     private static boolean hasMatchingBaseTitle(String trackName, String normalizedTitle) {
@@ -403,15 +444,35 @@ public class SpotifyPlaylistService {
         if (album == null) {
             return null;
         }
-        List<ArtworkImage> available = album.images() == null
+        List<ArtworkImage> images = album.images() == null
                 ? List.of()
                 : album.images().stream()
                         .filter(image -> image != null && image.url() != null && !image.url().isBlank())
                         .map(image -> new ArtworkImage(image.url(), image.width(), image.height()))
                         .toList();
-        List<ArtworkImage> images = available.isEmpty() ? List.of() : List.of(pickArtwork(available));
         String spotifyUrl = album.externalUrls() == null ? null : album.externalUrls().get("spotify");
         return new CandidateAlbum(album.name(), spotifyUrl, images);
+    }
+
+    /**
+     * Trims a row to what the review UI shows: at most MAX_CANDIDATES_PER_SONG candidates, each with one
+     * artwork image. The controller builds the confirm allowlist from these rows, so it matches the UI.
+     * /playlists/generate keeps the untrimmed rows.
+     */
+    private static SongReview forPreview(SongReview review) {
+        List<TrackCandidate> candidates = review.candidates().stream()
+                .limit(MAX_CANDIDATES_PER_SONG)
+                .map(candidate -> new TrackCandidate(candidate.name(), candidate.artists(), candidate.uri(),
+                        candidate.spotifyUrl(), withOneArtwork(candidate.album())))
+                .toList();
+        return new SongReview(review.songId(), review.title(), review.status(), review.reason(), candidates);
+    }
+
+    private static CandidateAlbum withOneArtwork(CandidateAlbum album) {
+        if (album == null || album.images().size() <= 1) {
+            return album;
+        }
+        return new CandidateAlbum(album.name(), album.spotifyUrl(), List.of(pickArtwork(album.images())));
     }
 
     /** Smallest image at least MIN_ARTWORK_PIXELS wide, else the largest sized one, else the first. */
