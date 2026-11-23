@@ -20,6 +20,7 @@ import com.setlistify.setlistify.model.dto.SpotifyDTOs.SearchResponse.AlbumItem;
 import com.setlistify.setlistify.model.dto.SpotifyDTOs.SearchResponse.ArtistItem;
 import com.setlistify.setlistify.model.dto.SpotifyDTOs.SearchResponse.TrackItem;
 import com.setlistify.setlistify.services.SetlistService.SetlistTracks;
+import com.setlistify.setlistify.util.TtlCache;
 import com.setlistify.setlistify.exception.PreviewSupersededException;
 import com.setlistify.setlistify.exception.SpotifyMatchTimeoutException;
 import com.setlistify.setlistify.exception.SpotifyRateLimitedException;
@@ -59,8 +60,14 @@ import java.util.regex.Pattern;
 @Service
 public class SpotifyPlaylistService {
     private static final Logger logger = LoggerFactory.getLogger(SpotifyPlaylistService.class);
-    /** Searches in flight across all requests; Spotify's rate limit applies to the whole app. */
-    static final int MAX_CONCURRENT_SEARCHES = 6;
+    /**
+     * Searches in flight across all requests; Spotify's rate limit applies to the whole app. Lowered from 6
+     * after bursts of ~20 searches/s earned a ~2 hour 429 in development mode.
+     */
+    static final int MAX_CONCURRENT_SEARCHES = 3;
+    /** Search results are reused for an hour, so re-matching a concert costs no Spotify calls. */
+    private static final Duration SEARCH_CACHE_TTL = Duration.ofHours(1);
+    private static final int SEARCH_CACHE_MAX_ENTRIES = 5_000;
     /** Candidates offered per song; the confirm step only accepts URIs from this list. */
     static final int MAX_CANDIDATES_PER_SONG = 3;
     private static final Duration DEFAULT_MATCH_DEADLINE = Duration.ofSeconds(15);
@@ -80,6 +87,9 @@ public class SpotifyPlaylistService {
     private final SetlistService setlistService;
     private final Semaphore searchPermits = new Semaphore(MAX_CONCURRENT_SEARCHES);
     private final AtomicLong rateLimitedUntilMillis = new AtomicLong();
+    // Shared across users. Results can vary by the signed-in user's market; fine for a few users in one region.
+    private final TtlCache<String, List<TrackItem>> searchCache =
+            new TtlCache<>(SEARCH_CACHE_MAX_ENTRIES, SEARCH_CACHE_TTL);
     private final Duration matchDeadline;
 
     @Autowired
@@ -310,6 +320,12 @@ public class SpotifyPlaylistService {
     }
 
     private List<TrackItem> searchCandidates(String accessToken, String query, MatchStats stats) {
+        // Checked before the cooldown, so already-searched concerts still preview while Spotify is limiting us.
+        List<TrackItem> cached = searchCache.get(query);
+        if (cached != null) {
+            stats.cacheHits.incrementAndGet();
+            return cached;
+        }
         failFastDuringCooldown();
         acquireSearchPermit(stats);
         SearchResponse search;
@@ -334,7 +350,9 @@ public class SpotifyPlaylistService {
         if (search == null || search.tracks() == null || search.tracks().items() == null) {
             throw new IllegalStateException("Spotify track search returned an incomplete response");
         }
-        return search.tracks().items();
+        List<TrackItem> items = search.tracks().items().stream().filter(Objects::nonNull).toList();
+        searchCache.put(query, items);
+        return items;
     }
 
     /** Waits for a permit, giving up as soon as a newer preview supersedes this one. */
@@ -377,10 +395,11 @@ public class SpotifyPlaylistService {
     private static void logTimings(String operation, int songCount, long setlistNanos, MatchStats stats,
                                    long totalNanos) {
         logger.info("Spotify {} for {} songs ({} distinct titles): total {} ms, setlist {} ms, "
-                        + "{} searches ({} fallbacks, {} rate limited) taking {} ms combined",
+                        + "{} searches ({} fallbacks, {} rate limited) taking {} ms combined, {} cache hits",
                 operation, songCount, stats.distinctTitles, TimeUnit.NANOSECONDS.toMillis(totalNanos),
                 TimeUnit.NANOSECONDS.toMillis(setlistNanos), stats.searches.get(), stats.fallbacks.get(),
-                stats.rateLimited.get(), TimeUnit.NANOSECONDS.toMillis(stats.searchNanos.get()));
+                stats.rateLimited.get(), TimeUnit.NANOSECONDS.toMillis(stats.searchNanos.get()),
+                stats.cacheHits.get());
     }
 
     private static final class MatchStats {
@@ -388,6 +407,7 @@ public class SpotifyPlaylistService {
         final AtomicInteger searches = new AtomicInteger();
         final AtomicInteger fallbacks = new AtomicInteger();
         final AtomicInteger rateLimited = new AtomicInteger();
+        final AtomicInteger cacheHits = new AtomicInteger();
         final AtomicLong searchNanos = new AtomicLong();
         volatile int distinctTitles;
 

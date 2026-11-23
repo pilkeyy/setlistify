@@ -8,6 +8,8 @@ import com.setlistify.setlistify.model.dto.SpotifyDTOs.CreatePlaylistRequest;
 import com.setlistify.setlistify.model.dto.SpotifyDTOs.PlaylistResponse;
 import com.setlistify.setlistify.model.dto.SpotifyDTOs.UserProfile;
 import com.setlistify.setlistify.model.dto.SpotifyDTOs.TokenResponse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -22,6 +24,7 @@ import java.util.function.Supplier;
 
 @Component
 public class SpotifyClient {
+    private static final Logger logger = LoggerFactory.getLogger(SpotifyClient.class);
     private final SpotifyOauthConfig oauthConfig;
     private final RestClient authRestClient;
     private final RestClient apiRestClient;
@@ -69,7 +72,7 @@ public class SpotifyClient {
     }
 
     public UserProfile fetchUserProfile(String accessToken) {
-        return executeSpotifyApiRequest(() -> apiRestClient.get()
+        return executeSpotifyApiRequest("profile", () -> apiRestClient.get()
                                                           .uri("/me")
                                                           .header("Authorization", "Bearer " + accessToken)
                                                           .retrieve()
@@ -78,7 +81,7 @@ public class SpotifyClient {
 
     public PlaylistResponse createPlaylist(CreatePlaylistRequest request, String accessToken) {
 
-        return executeSpotifyApiRequest(() -> apiRestClient.post()
+        return executeSpotifyApiRequest("create playlist", () -> apiRestClient.post()
                                                           .uri("/me/playlists")
                                                           .header("Authorization", "Bearer " + accessToken)
                                                           .contentType(MediaType.APPLICATION_JSON)
@@ -88,7 +91,7 @@ public class SpotifyClient {
     }
 
     public SearchResponse searchTrack(String accessToken, String query) {
-        return executeSpotifyApiRequest(() -> apiRestClient.get()
+        return executeSpotifyApiRequest("search", () -> apiRestClient.get()
                                                           .uri(uriBuilder -> uriBuilder.path("/search")
                                                                                        .queryParam("q", "{query}")
                                                                                        .queryParam("type", "track")
@@ -100,7 +103,7 @@ public class SpotifyClient {
     }
 
     public void addTracksToPlaylist(String accessToken, String playlistID, List<String> batch) {
-        executeSpotifyApiRequest(() -> {
+        executeSpotifyApiRequest("add tracks", () -> {
             apiRestClient.post()
                          .uri("/playlists/{playlist_id}/items", playlistID)
                          .header("Authorization", "Bearer " + accessToken)
@@ -112,11 +115,14 @@ public class SpotifyClient {
         });
     }
 
-    private <T> T executeSpotifyApiRequest(Supplier<T> request) {
+    private <T> T executeSpotifyApiRequest(String operation, Supplier<T> request) {
         try {
             return request.get();
         } catch (RestClientResponseException exception) {
             int status = exception.getStatusCode().value();
+            if (status == 429) {
+                logger.warn("Spotify {} returned 429 (Retry-After: {})", operation, retryAfter(exception));
+            }
             if (status == 401) {
                 throw new SpotifyAuthorizationException(HttpStatus.UNAUTHORIZED, exception);
             }
@@ -125,5 +131,11 @@ public class SpotifyClient {
             }
             throw exception;
         }
+    }
+
+    static String retryAfter(RestClientResponseException exception) {
+        return exception.getResponseHeaders() == null
+                ? "none"
+                : String.valueOf(exception.getResponseHeaders().getFirst("Retry-After"));
     }
 }

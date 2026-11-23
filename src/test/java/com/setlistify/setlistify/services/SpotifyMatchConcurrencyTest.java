@@ -191,6 +191,34 @@ class SpotifyMatchConcurrencyTest {
         verify(spotify, atMost(SpotifyPlaylistService.MAX_CONCURRENT_SEARCHES)).searchTrack(eq("token"), anyString());
     }
 
+    @Test
+    void rematchingAConcertReusesCachedSearches() {
+        when(setlists.getSetlistTracks("concert")).thenReturn(new SetlistTracks("Band", List.of("Song 1", "Song 2")));
+        when(spotify.searchTrack(eq("token"), anyString())).thenAnswer(invocation ->
+                found(((String) invocation.getArgument(1)).contains("Song 1") ? "Song 1" : "Song 2"));
+
+        List<SongReview> first = service.previewPlaylist("concert", "token").songs();
+        List<SongReview> second = service.previewPlaylist("concert", "token").songs();
+
+        assertEquals(first, second);
+        verify(spotify, times(2)).searchTrack(eq("token"), anyString());
+    }
+
+    @Test
+    void cachedConcertStillPreviewsDuringCooldown() {
+        when(setlists.getSetlistTracks("cached")).thenReturn(new SetlistTracks("Band", List.of("Song 1")));
+        when(setlists.getSetlistTracks("limited")).thenReturn(new SetlistTracks("Band", List.of("Limited")));
+        when(spotify.searchTrack(eq("token"), contains("Song 1"))).thenReturn(found("Song 1"));
+        when(spotify.searchTrack(eq("token"), contains("Limited"))).thenThrow(tooManyRequests("30"));
+        service.previewPlaylist("cached", "token");
+        assertThrows(SpotifyRateLimitedException.class, () -> service.previewPlaylist("limited", "token"));
+
+        SongReview row = service.previewPlaylist("cached", "token").songs().getFirst();
+
+        assertEquals("Song 1", row.title());
+        verify(spotify, times(1)).searchTrack(eq("token"), contains("Song 1"));
+    }
+
     private static HttpClientErrorException tooManyRequests(String retryAfter) {
         HttpHeaders headers = new HttpHeaders();
         if (retryAfter != null) {
