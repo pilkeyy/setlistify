@@ -1,6 +1,8 @@
 package com.setlistify.setlistify.controller;
 
 import com.setlistify.setlistify.exception.SpotifyAuthorizationException;
+import com.setlistify.setlistify.exception.SpotifyMatchTimeoutException;
+import com.setlistify.setlistify.exception.SpotifyRateLimitedException;
 import com.setlistify.setlistify.model.dto.ApiError;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -60,6 +62,22 @@ public class ApiExceptionHandler {
 
         ApiError body = new ApiError(localStatus.value(), localStatus.getReasonPhrase(), message);
         return new ResponseEntity<>(body, headers, localStatus);
+    }
+
+    @ExceptionHandler(SpotifyRateLimitedException.class)
+    public ResponseEntity<ApiError> handleSpotifyCooldown(SpotifyRateLimitedException exception) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.set(HttpHeaders.RETRY_AFTER, Long.toString(exception.retryAfterSeconds()));
+        HttpStatus status = HttpStatus.SERVICE_UNAVAILABLE;
+        ApiError body = new ApiError(status.value(), status.getReasonPhrase(),
+                "An external service is rate limiting requests. Please try again later.");
+        return new ResponseEntity<>(body, headers, status);
+    }
+
+    @ExceptionHandler(SpotifyMatchTimeoutException.class)
+    public ResponseEntity<ApiError> handleMatchTimeout(SpotifyMatchTimeoutException exception) {
+        logger.warn("Spotify matching exceeded the preview deadline");
+        return error(HttpStatus.GATEWAY_TIMEOUT, "Spotify took too long to match these songs. Please try again.");
     }
 
     @ExceptionHandler(ResourceAccessException.class)

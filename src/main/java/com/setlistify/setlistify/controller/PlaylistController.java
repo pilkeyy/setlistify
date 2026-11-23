@@ -34,6 +34,8 @@ import java.util.UUID;
 @RequestMapping("/api/v1")
 public class PlaylistController {
     private static final String REVIEW = "playlist_review";
+    /** ID of the most recently started preview; only that preview may replace the active review. */
+    private static final String PENDING_REVIEW = "playlist_review_pending";
     private static final int MAX_PLAYLIST_NAME_LENGTH = 100;
     private final SpotifyPlaylistService playlistService;
     private final SpotifyAuthService authService;
@@ -61,12 +63,15 @@ public class PlaylistController {
                     401, "Unauthorized", "Sign in with Spotify before previewing a playlist."));
         }
 
+        String reviewId = UUID.randomUUID().toString();
+        synchronized (WebUtils.getSessionMutex(session)) {
+            session.setAttribute(PENDING_REVIEW, reviewId);
+        }
         PreviewResponse preview = playlistService.previewPlaylist(request.setlistId(), accessToken);
         if (preview == null) {
             return ResponseEntity.unprocessableEntity().body(new ApiError(
                     422, "Unprocessable Entity", "The selected setlist must include an artist and at least one song."));
         }
-        String reviewId = UUID.randomUUID().toString();
         List<ReviewRow> rows = preview.songs().stream()
                 .map(song -> new ReviewRow(song.songId(), song.candidates().stream().map(candidate -> candidate.uri()).toList()))
                 .toList();
@@ -74,6 +79,10 @@ public class PlaylistController {
             if (!sessionId.equals(session.getId())) {
                 return reviewError(HttpStatus.CONFLICT, "Your Spotify session changed. Review the matches again.");
             }
+            if (!reviewId.equals(session.getAttribute(PENDING_REVIEW))) {
+                return reviewError(HttpStatus.CONFLICT, "A newer review was started. Use that review instead.");
+            }
+            session.removeAttribute(PENDING_REVIEW);
             session.setAttribute(REVIEW, new PlaylistReview(reviewId, sessionId, preview.artistName(),
                     Instant.now().plusSeconds(30 * 60), rows));
         }

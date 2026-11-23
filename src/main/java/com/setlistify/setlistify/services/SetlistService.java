@@ -7,12 +7,26 @@ import com.setlistify.setlistify.model.dto.SetlistFmDTOs.SetlistResponse;
 import com.setlistify.setlistify.model.dto.SetlistFmDTOs.SongRecord;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 @Service
 public class SetlistService {
+    // The browser loads a setlist's songs before the user previews Spotify matches, often with an OAuth
+    // round-trip in between, so cached entries must outlive that gap.
+    private static final Duration CACHE_TTL = Duration.ofMinutes(15);
+    private static final int CACHE_MAX_ENTRIES = 200;
+
     private final SetlistFmClient setlistFmClient;
+    private final Map<String, CachedSetlist> cache = new LinkedHashMap<>(16, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, CachedSetlist> eldest) {
+            return size() > CACHE_MAX_ENTRIES;
+        }
+    };
 
     public SetlistService(SetlistFmClient setlistFmClient) {
         this.setlistFmClient = setlistFmClient;
@@ -33,6 +47,24 @@ public class SetlistService {
     }
 
     SetlistTracks getSetlistTracks(String setlistId) {
+        long now = System.nanoTime();
+        synchronized (cache) {
+            CachedSetlist cached = cache.get(setlistId);
+            if (cached != null && now - cached.loadedAt() < CACHE_TTL.toNanos()) {
+                return cached.tracks();
+            }
+            cache.remove(setlistId);
+        }
+        SetlistTracks tracks = fetchSetlistTracks(setlistId);
+        if (tracks.artistName() != null && !tracks.songs().isEmpty()) {
+            synchronized (cache) {
+                cache.put(setlistId, new CachedSetlist(tracks, now));
+            }
+        }
+        return tracks;
+    }
+
+    private SetlistTracks fetchSetlistTracks(String setlistId) {
         ConcertRecord concert = setlistFmClient.fetchSingleSetlist(setlistId);
         if (concert == null || concert.sets() == null || concert.sets().set() == null) {
             return new SetlistTracks(null, List.of());
@@ -49,6 +81,9 @@ public class SetlistService {
     }
 
     record SetlistTracks(String artistName, List<String> songs) {
+    }
+
+    private record CachedSetlist(SetlistTracks tracks, long loadedAt) {
     }
 }
 

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 
+// Matches SpotifyPlaylistService.MAX_CANDIDATES_PER_SONG; the server already caps the list.
 const MAX_RECORDINGS_PER_SONG = 3;
 
 const reasons = {
@@ -72,6 +73,9 @@ export default function MatchReview({ setlistId, concertDate, venueName, tracks,
   const [creation, setCreation] = useState({ status: 'idle', message: '', link: null });
   const reviewTitle = useRef(null);
   const connectLink = useRef(null);
+  const previewRequest = useRef(null);
+
+  useEffect(() => () => previewRequest.current?.abort(), []);
 
   useEffect(() => {
     if (status === 'ready') {
@@ -90,8 +94,11 @@ export default function MatchReview({ setlistId, concertDate, venueName, tracks,
   }, [retryAt]);
 
   async function loadPreview() {
+    previewRequest.current?.abort();
+    const request = new AbortController();
+    previewRequest.current = request;
     setStatus('loading');
-    setMessage('');
+    setMessage(`Matching ${tracks.length} songs on Spotify…`);
     setSongs(null);
     setCreation({ status: 'idle', message: '', link: null });
     try {
@@ -99,9 +106,13 @@ export default function MatchReview({ setlistId, concertDate, venueName, tracks,
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ setlistId }),
+        signal: request.signal,
       });
       if (!response.ok) {
         const error = await response.json().catch(() => null);
+        if (request.signal.aborted) {
+          return;
+        }
         if (response.status === 401) {
           setStatus('sign-in');
           setMessage('Connect Spotify to review these songs.');
@@ -116,6 +127,9 @@ export default function MatchReview({ setlistId, concertDate, venueName, tracks,
         return;
       }
       const preview = await response.json();
+      if (request.signal.aborted) {
+        return;
+      }
       if (preview.setlistId !== setlistId || !preview.reviewId || !Array.isArray(preview.songs)) {
         throw new Error('Unexpected preview response');
       }
@@ -138,6 +152,9 @@ export default function MatchReview({ setlistId, concertDate, venueName, tracks,
       setStatus('ready');
       setMessage(`Loaded ${preview.songs.length} songs for review.`);
     } catch {
+      if (request.signal.aborted) {
+        return;
+      }
       setStatus('error');
       setMessage('Could not load Spotify matches. Please try again.');
     }

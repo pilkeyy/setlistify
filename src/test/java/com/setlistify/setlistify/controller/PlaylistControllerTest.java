@@ -2,6 +2,7 @@ package com.setlistify.setlistify.controller;
 
 import com.setlistify.setlistify.client.SpotifyClient;
 import com.setlistify.setlistify.model.dto.PlaylistDTOs.CreateRequest;
+import com.setlistify.setlistify.model.dto.PlaylistDTOs.PreviewResponse;
 import com.setlistify.setlistify.model.dto.PlaylistDTOs.ResultResponse;
 import com.setlistify.setlistify.services.SpotifyPlaylistService;
 import com.setlistify.setlistify.services.SpotifyAuthService;
@@ -16,11 +17,15 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.List;
 
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import com.jayway.jsonpath.JsonPath;
 
 @WebMvcTest(PlaylistController.class)
 @Import(SpotifyAuthService.class)
@@ -149,6 +154,31 @@ class PlaylistControllerTest {
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.playlistCreated").value(true))
                 .andExpect(jsonPath("$.playlistId").value("playlist-123"));
+    }
+
+    @Test
+    void slowerOlderPreviewDoesNotReplaceNewerReview() throws Exception {
+        MockHttpSession session = authenticatedSession();
+        String[] newerReviewId = new String[1];
+        when(playlistService.previewPlaylist(eq("concert-b"), anyString()))
+                .thenReturn(new PreviewResponse("concert-b", "Band B", List.of()));
+        // Concert A's preview is still matching when the user starts concert B, and A finishes last.
+        when(playlistService.previewPlaylist(eq("concert-a"), anyString())).thenAnswer(invocation -> {
+            String newer = mockMvc.perform(post("/api/v1/playlist-previews").session(session)
+                            .contentType(MediaType.APPLICATION_JSON).content("{\"setlistId\":\"concert-b\"}"))
+                    .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
+            newerReviewId[0] = JsonPath.read(newer, "$.reviewId");
+            return new PreviewResponse("concert-a", "Band A", List.of());
+        });
+
+        mockMvc.perform(post("/api/v1/playlist-previews").session(session)
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"setlistId\":\"concert-a\"}"))
+                .andExpect(status().isConflict());
+
+        Object review = session.getAttribute("playlist_review");
+        var id = review.getClass().getDeclaredMethod("id");
+        id.setAccessible(true);
+        assertEquals(newerReviewId[0], id.invoke(review));
     }
 
     private static MockHttpSession authenticatedSession() {
