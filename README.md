@@ -96,12 +96,13 @@ The backend stores the tokens and expiry in the HTTP session. It refreshes expir
 
 Matching was the slow step: originally one blocking Spotify search per song, one after another, after fetching the setlist from setlist.fm a second time. Measured from the per-preview timing log on real setlists:
 
-| Version | 38 songs | 50 songs |
-| --- | --- | --- |
-| Sequential searches (sum of search times) | 9.95 s | 14.1 s |
-| Parallel, 6 searches in flight | 1.76 s | 2.70 s |
-| Parallel, 3 searches in flight, first match | TODO(numbers) | TODO(numbers) |
-| Repeat match of the same concert (cached) | TODO(numbers) | TODO(numbers) |
+| Concert | Sequential (sum of search times) | 6 in flight | 3 in flight (current) | Repeat match (cached) |
+| --- | --- | --- | --- | --- |
+| 38 songs | 9.95 s | 1.76 s | — | 2 ms |
+| 44 songs | 11.6 s | — | 3.93 s | 2 ms |
+| 50 songs | 14.1 s | 2.70 s | — | — |
+
+A repeat match makes no Spotify calls. Concerts by the same artist share searches too: after the 44-song concert, a 38-song concert by the same artist needed only 8 new searches and finished in 0.65 s.
 
 How it stays within limits:
 
