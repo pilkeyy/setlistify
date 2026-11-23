@@ -1,5 +1,6 @@
 package com.setlistify.setlistify.controller;
 
+import com.setlistify.setlistify.exception.PreviewSupersededException;
 import com.setlistify.setlistify.model.dto.ApiError;
 import com.setlistify.setlistify.model.dto.PlaylistDTOs.ConfirmPlaylistRequest;
 import com.setlistify.setlistify.model.dto.PlaylistDTOs.ConfirmPlaylistResponse;
@@ -69,7 +70,13 @@ public class PlaylistController {
                     401, "Unauthorized", "Sign in with Spotify before previewing a playlist."));
         }
 
-        PreviewResponse preview = playlistService.previewPlaylist(request.setlistId(), accessToken);
+        PreviewResponse preview;
+        try {
+            preview = playlistService.previewPlaylist(request.setlistId(), accessToken,
+                    () -> isSuperseded(session, reviewId));
+        } catch (PreviewSupersededException exception) {
+            return reviewError(HttpStatus.CONFLICT, "A newer review was started. Use that review instead.");
+        }
         if (preview == null) {
             return ResponseEntity.unprocessableEntity().body(new ApiError(
                     422, "Unprocessable Entity", "The selected setlist must include an artist and at least one song."));
@@ -137,6 +144,15 @@ public class PlaylistController {
             status = HttpStatus.BAD_GATEWAY;
         }
         return ResponseEntity.status(status).cacheControl(CacheControl.noStore()).body(result);
+    }
+
+    /** True once a newer preview registered itself, or the session ended; called from search threads. */
+    private static boolean isSuperseded(HttpSession session, String reviewId) {
+        try {
+            return !reviewId.equals(session.getAttribute(PENDING_REVIEW));
+        } catch (IllegalStateException invalidated) {
+            return true;
+        }
     }
 
     private List<String> resolveSelections(List<ReviewRow> rows, List<TrackSelection> selections) {

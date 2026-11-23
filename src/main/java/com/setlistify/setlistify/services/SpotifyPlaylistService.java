@@ -20,6 +20,7 @@ import com.setlistify.setlistify.model.dto.SpotifyDTOs.SearchResponse.AlbumItem;
 import com.setlistify.setlistify.model.dto.SpotifyDTOs.SearchResponse.ArtistItem;
 import com.setlistify.setlistify.model.dto.SpotifyDTOs.SearchResponse.TrackItem;
 import com.setlistify.setlistify.services.SetlistService.SetlistTracks;
+import com.setlistify.setlistify.exception.PreviewSupersededException;
 import com.setlistify.setlistify.exception.SpotifyMatchTimeoutException;
 import com.setlistify.setlistify.exception.SpotifyRateLimitedException;
 import org.slf4j.Logger;
@@ -52,6 +53,7 @@ import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.BooleanSupplier;
 import java.util.regex.Pattern;
 
 @Service
@@ -63,6 +65,8 @@ public class SpotifyPlaylistService {
     static final int MAX_CANDIDATES_PER_SONG = 3;
     private static final Duration DEFAULT_MATCH_DEADLINE = Duration.ofSeconds(15);
     private static final Duration DEFAULT_RATE_LIMIT_COOLDOWN = Duration.ofSeconds(5);
+    /** How often a search waiting for a permit checks whether its preview was superseded. */
+    private static final Duration PERMIT_POLL = Duration.ofMillis(100);
     /** Artwork renders at 48px, so the smallest image covering 2x density is enough. */
     private static final int MIN_ARTWORK_PIXELS = 96;
     private static final String TITLE_VARIANT_LABEL = "bonus(?:\\s+track)?|remix|live|acoustic|demo|instrumental"
@@ -90,13 +94,21 @@ public class SpotifyPlaylistService {
     }
 
     public PreviewResponse previewPlaylist(String setlistId, String accessToken) {
+        return previewPlaylist(setlistId, accessToken, () -> false);
+    }
+
+    /**
+     * @param superseded checked before each Spotify search; once true, queued and future searches stop and the
+     *                   preview fails with {@link PreviewSupersededException}
+     */
+    public PreviewResponse previewPlaylist(String setlistId, String accessToken, BooleanSupplier superseded) {
         long started = System.nanoTime();
         SetlistTracks setlist = setlistService.getSetlistTracks(setlistId);
         long setlistNanos = System.nanoTime() - started;
         if (setlist.songs().isEmpty() || normalize(setlist.artistName()).isEmpty()) {
             return null;
         }
-        MatchStats stats = new MatchStats();
+        MatchStats stats = new MatchStats(superseded);
         try {
             List<SongReview> songs = matchSongs(setlist.songs(), setlist.artistName(), accessToken, stats);
             return new PreviewResponse(setlistId, setlist.artistName(),
@@ -113,7 +125,7 @@ public class SpotifyPlaylistService {
         if (songs == null || songs.isEmpty()) {
             return null;
         }
-        MatchStats stats = new MatchStats();
+        MatchStats stats = new MatchStats(() -> false);
         List<SongReview> reviews;
         try {
             reviews = matchSongs(songs, request.artistName(), accessToken, stats);
@@ -261,12 +273,12 @@ public class SpotifyPlaylistService {
     }
 
     /**
-     * While a Spotify cooldown is active, report it instead of an unrelated failure, so the client always
-     * receives Retry-After. An original 429 already carries Retry-After and is returned unchanged.
+     * While a Spotify cooldown is active, report it instead of other failures, so the client always receives
+     * Retry-After. Every 429 starts a cooldown (Retry-After or a default), so a 429 without its own header still
+     * reports how long to wait. Authorization failures are kept: the user must reconnect regardless.
      */
     private RuntimeException preferCooldown(RuntimeException failure) {
-        if (failure instanceof RestClientResponseException response
-                && response.getStatusCode().value() == HttpStatus.TOO_MANY_REQUESTS.value()) {
+        if (failure instanceof SpotifyAuthorizationException || failure instanceof PreviewSupersededException) {
             return failure;
         }
         long remainingMillis = rateLimitedUntilMillis.get() - System.currentTimeMillis();
@@ -299,17 +311,14 @@ public class SpotifyPlaylistService {
 
     private List<TrackItem> searchCandidates(String accessToken, String query, MatchStats stats) {
         failFastDuringCooldown();
-        try {
-            searchPermits.acquire();
-        } catch (InterruptedException exception) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("Interrupted while waiting to search Spotify", exception);
-        }
+        acquireSearchPermit(stats);
         SearchResponse search;
         long started = System.nanoTime();
         try {
-            // Re-check: a search that finished while this one was queued may have been rate limited.
+            // Re-check: while this search was queued, another may have been rate limited or a newer preview
+            // may have replaced this one.
             failFastDuringCooldown();
+            failIfSuperseded(stats);
             stats.searches.incrementAndGet();
             search = spotifyClient.searchTrack(accessToken, query);
         } catch (RestClientResponseException exception) {
@@ -326,6 +335,24 @@ public class SpotifyPlaylistService {
             throw new IllegalStateException("Spotify track search returned an incomplete response");
         }
         return search.tracks().items();
+    }
+
+    /** Waits for a permit, giving up as soon as a newer preview supersedes this one. */
+    private void acquireSearchPermit(MatchStats stats) {
+        try {
+            while (!searchPermits.tryAcquire(PERMIT_POLL.toMillis(), TimeUnit.MILLISECONDS)) {
+                failIfSuperseded(stats);
+            }
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while waiting to search Spotify", exception);
+        }
+    }
+
+    private static void failIfSuperseded(MatchStats stats) {
+        if (stats.superseded.getAsBoolean()) {
+            throw new PreviewSupersededException();
+        }
     }
 
     private void failFastDuringCooldown() {
@@ -357,11 +384,16 @@ public class SpotifyPlaylistService {
     }
 
     private static final class MatchStats {
+        final BooleanSupplier superseded;
         final AtomicInteger searches = new AtomicInteger();
         final AtomicInteger fallbacks = new AtomicInteger();
         final AtomicInteger rateLimited = new AtomicInteger();
         final AtomicLong searchNanos = new AtomicLong();
         volatile int distinctTitles;
+
+        MatchStats(BooleanSupplier superseded) {
+            this.superseded = superseded;
+        }
     }
 
     private static SongReview classifyCandidates(int songId, String song, String normalizedTitle,

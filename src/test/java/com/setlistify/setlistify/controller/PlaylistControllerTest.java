@@ -1,6 +1,7 @@
 package com.setlistify.setlistify.controller;
 
 import com.setlistify.setlistify.client.SpotifyClient;
+import com.setlistify.setlistify.exception.PreviewSupersededException;
 import com.setlistify.setlistify.model.dto.PlaylistDTOs.CreateRequest;
 import com.setlistify.setlistify.model.dto.PlaylistDTOs.PreviewResponse;
 import com.setlistify.setlistify.model.dto.SpotifyDTOs.TokenResponse;
@@ -19,6 +20,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -165,10 +167,10 @@ class PlaylistControllerTest {
     void slowerOlderPreviewDoesNotReplaceNewerReview() throws Exception {
         MockHttpSession session = authenticatedSession();
         String[] newerReviewId = new String[1];
-        when(playlistService.previewPlaylist(eq("concert-b"), anyString()))
+        when(playlistService.previewPlaylist(eq("concert-b"), anyString(), any()))
                 .thenReturn(new PreviewResponse("concert-b", "Band B", List.of()));
         // Concert A's preview is still matching when the user starts concert B, and A finishes last.
-        when(playlistService.previewPlaylist(eq("concert-a"), anyString())).thenAnswer(invocation -> {
+        when(playlistService.previewPlaylist(eq("concert-a"), anyString(), any())).thenAnswer(invocation -> {
             String newer = mockMvc.perform(post("/api/v1/playlist-previews").session(session)
                             .contentType(MediaType.APPLICATION_JSON).content("{\"setlistId\":\"concert-b\"}"))
                     .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
@@ -190,7 +192,7 @@ class PlaylistControllerTest {
                 .thenReturn(new TokenResponse("expiring", "Bearer", 1, "refresh", ""));
         authService.exchangeCodeForTokens("code", "verifier", session);
         Thread.sleep(1_100);
-        when(playlistService.previewPlaylist(anyString(), anyString())).thenAnswer(invocation ->
+        when(playlistService.previewPlaylist(anyString(), anyString(), any())).thenAnswer(invocation ->
                 new PreviewResponse(invocation.getArgument(0), "Band", List.of()));
         String[] newerReviewId = new String[1];
         AtomicInteger refreshes = new AtomicInteger();
@@ -210,6 +212,17 @@ class PlaylistControllerTest {
                 .andExpect(status().isConflict());
 
         assertEquals(newerReviewId[0], activeReviewId(session));
+    }
+
+    @Test
+    void supersededPreviewReturnsConflict() throws Exception {
+        when(playlistService.previewPlaylist(anyString(), anyString(), any()))
+                .thenThrow(new PreviewSupersededException());
+
+        mockMvc.perform(post("/api/v1/playlist-previews").session(authenticatedSession())
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"setlistId\":\"concert\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value("A newer review was started. Use that review instead."));
     }
 
     private static Object activeReviewId(MockHttpSession session) throws Exception {

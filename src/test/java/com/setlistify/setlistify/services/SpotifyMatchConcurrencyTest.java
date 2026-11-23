@@ -1,6 +1,8 @@
 package com.setlistify.setlistify.services;
 
 import com.setlistify.setlistify.client.SpotifyClient;
+import com.setlistify.setlistify.exception.PreviewSupersededException;
+import com.setlistify.setlistify.exception.SpotifyAuthorizationException;
 import com.setlistify.setlistify.exception.SpotifyRateLimitedException;
 import com.setlistify.setlistify.model.dto.PlaylistDTOs.CreateRequest;
 import com.setlistify.setlistify.model.dto.PlaylistDTOs.ResultResponse;
@@ -22,6 +24,7 @@ import org.springframework.web.client.ResourceAccessException;
 import java.time.Duration;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.IntStream;
 
@@ -31,6 +34,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atMost;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -73,9 +77,9 @@ class SpotifyMatchConcurrencyTest {
                 HttpStatus.TOO_MANY_REQUESTS, "Too Many Requests", headers, new byte[0], null);
         when(spotify.searchTrack(eq("token"), anyString())).thenThrow(tooMany);
 
-        HttpClientErrorException thrown = assertThrows(HttpClientErrorException.class,
+        SpotifyRateLimitedException first = assertThrows(SpotifyRateLimitedException.class,
                 () -> service.previewPlaylist("concert", "token"));
-        assertEquals("30", thrown.getResponseHeaders().getFirst(HttpHeaders.RETRY_AFTER));
+        assertEquals(30, first.retryAfterSeconds());
 
         SpotifyRateLimitedException cooldown = assertThrows(SpotifyRateLimitedException.class,
                 () -> service.previewPlaylist("concert", "token"));
@@ -92,10 +96,10 @@ class SpotifyMatchConcurrencyTest {
         });
         when(spotify.searchTrack(eq("token"), contains("Limited"))).thenThrow(tooManyRequests("30"));
 
-        HttpClientErrorException thrown = assertThrows(HttpClientErrorException.class,
+        SpotifyRateLimitedException thrown = assertThrows(SpotifyRateLimitedException.class,
                 () -> service.previewPlaylist("concert", "token"));
 
-        assertEquals("30", thrown.getResponseHeaders().getFirst(HttpHeaders.RETRY_AFTER));
+        assertEquals(30, thrown.retryAfterSeconds());
     }
 
     @Test
@@ -106,7 +110,7 @@ class SpotifyMatchConcurrencyTest {
         when(spotify.searchTrack(eq("token"), contains("Limited"))).thenThrow(tooManyRequests("30"));
         when(spotify.searchTrack(eq("token"), contains("Slow"))).thenAnswer(invocation -> {
             // Another preview is rate limited while this search is still in flight.
-            assertThrows(HttpClientErrorException.class, () -> shortDeadline.previewPlaylist("limited", "token"));
+            assertThrows(SpotifyRateLimitedException.class, () -> shortDeadline.previewPlaylist("limited", "token"));
             Thread.sleep(1_000);
             return found("Slow");
         });
@@ -142,9 +146,56 @@ class SpotifyMatchConcurrencyTest {
         assertEquals(3, generatedFirst.album().images().size());
     }
 
+    @Test
+    void reportsDefaultCooldownWhenA429HasNoRetryAfter() {
+        when(setlists.getSetlistTracks("concert")).thenReturn(new SetlistTracks("Band", List.of("Song")));
+        when(spotify.searchTrack(eq("token"), anyString())).thenThrow(tooManyRequests(null));
+
+        SpotifyRateLimitedException thrown = assertThrows(SpotifyRateLimitedException.class,
+                () -> service.previewPlaylist("concert", "token"));
+
+        assertTrue(thrown.retryAfterSeconds() > 0 && thrown.retryAfterSeconds() <= 5, "was " + thrown.retryAfterSeconds());
+    }
+
+    @Test
+    void keepsAuthorizationFailureDuringCooldown() {
+        when(setlists.getSetlistTracks("slow")).thenReturn(new SetlistTracks("Band", List.of("Slow")));
+        when(setlists.getSetlistTracks("limited")).thenReturn(new SetlistTracks("Band", List.of("Limited")));
+        when(spotify.searchTrack(eq("token"), contains("Limited"))).thenThrow(tooManyRequests("30"));
+        when(spotify.searchTrack(eq("token"), contains("Slow"))).thenAnswer(invocation -> {
+            // Another preview starts a cooldown, then this in-flight search is rejected as unauthorized.
+            assertThrows(SpotifyRateLimitedException.class, () -> service.previewPlaylist("limited", "token"));
+            throw new SpotifyAuthorizationException(HttpStatus.UNAUTHORIZED, null);
+        });
+
+        SpotifyAuthorizationException thrown = assertThrows(SpotifyAuthorizationException.class,
+                () -> service.previewPlaylist("slow", "token"));
+
+        assertEquals(HttpStatus.UNAUTHORIZED, thrown.status());
+    }
+
+    @Test
+    void stopsQueuedSearchesOnceSuperseded() {
+        List<String> songs = IntStream.rangeClosed(1, 30).mapToObj(i -> "Song " + i).toList();
+        when(setlists.getSetlistTracks("concert")).thenReturn(new SetlistTracks("Band", songs));
+        AtomicBoolean superseded = new AtomicBoolean();
+        when(spotify.searchTrack(eq("token"), anyString())).thenAnswer(invocation -> {
+            superseded.set(true); // The user started a newer preview while the first searches were running.
+            Thread.sleep(300);
+            return found("Song");
+        });
+
+        assertThrows(PreviewSupersededException.class,
+                () -> service.previewPlaylist("concert", "token", superseded::get));
+
+        verify(spotify, atMost(SpotifyPlaylistService.MAX_CONCURRENT_SEARCHES)).searchTrack(eq("token"), anyString());
+    }
+
     private static HttpClientErrorException tooManyRequests(String retryAfter) {
         HttpHeaders headers = new HttpHeaders();
-        headers.set(HttpHeaders.RETRY_AFTER, retryAfter);
+        if (retryAfter != null) {
+            headers.set(HttpHeaders.RETRY_AFTER, retryAfter);
+        }
         return HttpClientErrorException.create(HttpStatus.TOO_MANY_REQUESTS, "Too Many Requests", headers, new byte[0], null);
     }
 
